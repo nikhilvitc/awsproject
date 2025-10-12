@@ -230,7 +230,7 @@ router.post('/:roomId/join', async (req, res) => {
     // Check if user is already a member (check all possible ways)
     const isAlreadyMember = (room.participants && room.participants.some(p => p.username === sanitizedUsername)) || 
                            room.createdBy === sanitizedUsername || 
-                           (room.admins && room.admins.includes(sanitizedUsername));
+                           chatRoomService.isUserAdmin(room, sanitizedUsername);
     
     if (isAlreadyMember) {
       return res.json({ 
@@ -302,7 +302,7 @@ router.get('/:roomName', async (req, res) => {
     // Check if user is a member of the room
     const isParticipant = room.participants.some(p => p.username === username);
     const isCreator = room.createdBy === username;
-    const isAdmin = room.admins.includes(username);
+    const isAdmin = chatRoomService.isUserAdmin(room, username);
     const isMember = isParticipant || isCreator || isAdmin;
     
     console.log('Room access check:', {
@@ -399,7 +399,7 @@ router.get('/:roomId/messages', async (req, res) => {
     // Check if user is a member of the room
     const isParticipant = room.participants && room.participants.some(p => p.username === username);
     const isCreator = room.createdBy === username;
-    const isAdmin = room.admins && room.admins.includes(username);
+    const isAdmin = chatRoomService.isUserAdmin(room, username);
     const isMember = isParticipant || isCreator || isAdmin;
     
     console.log('Messages access check:', {
@@ -569,7 +569,7 @@ router.delete('/:roomId/members/:username', async (req, res) => {
     }
     
     // Check if admin has permission
-    if (!room.hasPermission(adminUsername, 'canRemoveMembers')) {
+    if (!chatRoomService.hasPermission(room, adminUsername, 'canRemoveMembers')) {
       return res.status(403).json({ error: 'Permission denied' });
     }
     
@@ -584,7 +584,10 @@ router.delete('/:roomId/members/:username', async (req, res) => {
     // Remove from admins if they were an admin
     room.admins = room.admins.filter(admin => admin !== targetUsername);
     
-    await room.save();
+    await chatRoomService.updateRoom(room.roomId, {
+      participants: room.participants,
+      admins: room.admins
+    });
     
     res.json({ success: true, message: 'Member removed successfully' });
   } catch (err) {
@@ -605,12 +608,12 @@ router.post('/:roomId/admins', async (req, res) => {
     }
     
     // Check if admin has permission
-    if (!room.hasPermission(adminUsername, 'canManageAdmins')) {
+    if (!chatRoomService.hasPermission(room, adminUsername, 'canManageAdmins')) {
       return res.status(403).json({ error: 'Permission denied' });
     }
     
     // Add to admins if not already
-    if (!room.admins.includes(targetUsername)) {
+    if (!chatRoomService.isUserAdmin(room, targetUsername)) {
       room.admins.push(targetUsername);
       
       // Update participant permissions
@@ -625,7 +628,10 @@ router.post('/:roomId/admins', async (req, res) => {
         };
       }
       
-      await room.save();
+      await chatRoomService.updateRoom(room.roomId, {
+        admins: room.admins,
+        participants: room.participants
+      });
     }
     
     res.json({ success: true, message: 'User promoted to admin' });
@@ -647,7 +653,7 @@ router.delete('/:roomId/admins/:username', async (req, res) => {
     }
     
     // Check if admin has permission
-    if (!room.hasPermission(adminUsername, 'canManageAdmins')) {
+    if (!chatRoomService.hasPermission(room, adminUsername, 'canManageAdmins')) {
       return res.status(403).json({ error: 'Permission denied' });
     }
     
@@ -671,7 +677,10 @@ router.delete('/:roomId/admins/:username', async (req, res) => {
       };
     }
     
-    await room.save();
+    await chatRoomService.updateRoom(room.roomId, {
+      admins: room.admins,
+      participants: room.participants
+    });
     
     res.json({ success: true, message: 'Admin demoted to member' });
   } catch (err) {
@@ -692,13 +701,15 @@ router.patch('/:roomId/settings', async (req, res) => {
     }
     
     // Check if user has permission
-    if (!room.hasPermission(username, 'canEditRoomSettings')) {
+    if (!chatRoomService.hasPermission(room, username, 'canEditRoomSettings')) {
       return res.status(403).json({ error: 'Permission denied' });
     }
     
     // Update settings
     room.settings = { ...room.settings, ...settings };
-    await room.save();
+    await chatRoomService.updateRoom(room.roomId, {
+      settings: room.settings
+    });
     
     res.json({ success: true, message: 'Room settings updated', settings: room.settings });
   } catch (err) {
@@ -719,7 +730,7 @@ router.delete('/:roomId/messages/:messageId', async (req, res) => {
     }
     
     // Check if user has permission
-    if (!room.hasPermission(username, 'canDeleteMessages')) {
+    if (!chatRoomService.hasPermission(room, username, 'canDeleteMessages')) {
       return res.status(403).json({ error: 'Permission denied' });
     }
     
@@ -753,7 +764,7 @@ router.patch('/:roomId/name', async (req, res) => {
     }
     
     // Check if user has permission
-    if (!room.hasPermission(username, 'canEditRoomSettings')) {
+    if (!chatRoomService.hasPermission(room, username, 'canEditRoomSettings')) {
       return res.status(403).json({ error: 'Permission denied' });
     }
     
@@ -766,7 +777,9 @@ router.patch('/:roomId/name', async (req, res) => {
     // Update room name
     const oldName = room.name;
     room.name = newName.trim();
-    await room.save();
+    await chatRoomService.updateRoom(room.roomId, {
+      name: room.name
+    });
     
     res.json({ 
       success: true, 
@@ -796,13 +809,15 @@ router.patch('/:roomId/color', async (req, res) => {
     }
     
     // Check if user has permission
-    if (!room.hasPermission(username, 'canEditRoomSettings')) {
+    if (!chatRoomService.hasPermission(room, username, 'canEditRoomSettings')) {
       return res.status(403).json({ error: 'Permission denied' });
     }
     
     // Update room color
     room.color = color;
-    await room.save();
+    await chatRoomService.updateRoom(room.roomId, {
+      color: room.color
+    });
     
     res.json({ 
       success: true, 
@@ -826,7 +841,7 @@ router.get('/:roomId/permissions/:username', async (req, res) => {
     }
     
     // Check if user is admin
-    const isAdmin = room.admins && room.admins.includes(username);
+    const isAdmin = chatRoomService.isUserAdmin(room, username);
     const isCreator = room.createdBy === username;
     
     // Default permissions for admins/creators
@@ -858,7 +873,7 @@ router.delete('/:roomId/members/:username', async (req, res) => {
     }
     
     // Check if admin has permission
-    if (!room.hasPermission(adminUsername, 'canRemoveMembers')) {
+    if (!chatRoomService.hasPermission(room, adminUsername, 'canRemoveMembers')) {
       return res.status(403).json({ error: 'Permission denied' });
     }
     
@@ -878,7 +893,10 @@ router.delete('/:roomId/members/:username', async (req, res) => {
     // Remove from admins if they were an admin
     room.admins = room.admins.filter(admin => admin !== targetUsername);
     
-    await room.save();
+    await chatRoomService.updateRoom(room.roomId, {
+      participants: room.participants,
+      admins: room.admins
+    });
     
     res.json({ 
       success: true, 
@@ -906,14 +924,14 @@ router.post('/:roomId/invite-admin', async (req, res) => {
     }
     
     // Check if inviter has permission to manage admins
-    if (!room.hasPermission(invitedBy, 'canManageAdmins')) {
+    if (!chatRoomService.hasPermission(room, invitedBy, 'canManageAdmins')) {
       return res.status(403).json({ error: 'Permission denied' });
     }
     
     // Check if user is already a member
     const isAlreadyMember = room.participants.some(p => p.username === username) || 
                            room.createdBy === username || 
-                           room.admins.includes(username);
+                           chatRoomService.isUserAdmin(room, username);
     
     if (isAlreadyMember) {
       return res.status(400).json({ error: 'User is already a member of this room' });
@@ -937,7 +955,10 @@ router.post('/:roomId/invite-admin', async (req, res) => {
     room.participants.push(newAdmin);
     room.admins.push(username);
     
-    await room.save();
+    await chatRoomService.updateRoom(room.roomId, {
+      participants: room.participants,
+      admins: room.admins
+    });
     
     res.json({ 
       success: true, 
