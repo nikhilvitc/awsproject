@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.backup
+.env.example
+*.log
+*.zip
+.DS_Store
+.elasticbeanstalk/
+.serverless/
+*.bak

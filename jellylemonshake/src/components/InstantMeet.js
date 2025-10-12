@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from './AuthContext';
+import { api } from './api';
 import '../styles/components/InstantMeet.css';
 
 function InstantMeet({ roomId, participants, onClose, onMeetingStarted }) {
@@ -39,40 +40,17 @@ function InstantMeet({ roomId, participants, onClose, onMeetingStarted }) {
         isRecurring: false
       };
 
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
-      
-      // Test API connection first
-      const statusResponse = await fetch(`${apiUrl}/api/meetings/debug/status`);
-      if (!statusResponse.ok) {
-        throw new Error('Meeting API is not responding. Please check your connection.');
-      }
-      
-      const response = await fetch(`${apiUrl}/api/meetings/create`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(meetingData)
-      });
-
-      const data = await response.json();
+      // Create meeting using the centralized API
+      const data = await api.createMeeting(meetingData);
       console.log('Instant meeting creation response:', data);
 
       if (data.success) {
         console.log('Meeting created successfully:', data.meeting);
         
         // Immediately set meeting status to active since it's an instant meeting
-        const statusResponse = await fetch(`${apiUrl}/api/meetings/${data.meeting.meetingId}/status`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            status: 'active'
-          })
-        });
+        const statusResult = await api.updateMeetingStatus(data.meeting.meetingId, 'active');
         
-        if (statusResponse.ok) {
+        if (statusResult.success) {
           console.log('Meeting status updated to active');
         } else {
           console.warn('Failed to update meeting status, but continuing...');

@@ -40,8 +40,7 @@ router.post('/execute', async (req, res) => {
       clientId: process.env.JDOODLE_CLIENT_ID,
       clientSecret: process.env.JDOODLE_CLIENT_SECRET,
       script: code,
-      language: language,
-      versionIndex: '0',
+      language: language
     });
     
     console.log('✅ JDoodle API response:', jdoodleRes.data);

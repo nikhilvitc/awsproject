@@ -66,6 +66,215 @@ body.editor-open {
   background: #a8a8a8;
 }
 
+/* === LIVE COLLABORATIVE EDITING STYLES === */
+
+/* Editor container with relative positioning for overlays */
+.editor-container {
+  position: relative;
+  width: 100%;
+}
+
+/* User presence indicators */
+.user-presence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 16px;
+}
+
+.user-indicator {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: bold;
+  font-size: 12px;
+  border: 2px solid white;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  animation: pulse 2s infinite;
+}
+
+.typing-indicator {
+  font-size: 16px;
+  animation: bounce 1s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+
+@keyframes bounce {
+  0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-3px); }
+  60% { transform: translateY(-2px); }
+}
+
+/* Editor controls */
+.editor-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.last-saved {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.conflict-warning {
+  font-size: 12px;
+  color: #ff6b6b;
+  font-weight: bold;
+  animation: pulse 2s infinite;
+}
+
+/* User cursors overlay */
+.cursors-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.user-cursor {
+  position: absolute;
+  top: 0;
+  height: 20px;
+  width: 2px;
+  z-index: 11;
+}
+
+.cursor-line {
+  width: 2px;
+  height: 20px;
+  background-color: inherit;
+  animation: blink 1s infinite;
+}
+
+.cursor-label {
+  position: absolute;
+  top: -20px;
+  left: 4px;
+  background-color: inherit;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: bold;
+  white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* User selection highlighting */
+.user-selection {
+  position: absolute;
+  background-color: rgba(255, 255, 0, 0.3);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 9;
+}
+
+/* Enhanced code editor */
+.code-editor {
+  width: 100%;
+  min-height: 400px;
+  padding: 16px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  background-color: #f8f9fa;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.code-editor:focus {
+  border-color: #007bff;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+/* Live editing indicators */
+.live-editing-active {
+  border-left: 4px solid #28a745;
+}
+
+.live-editing-active::before {
+  content: "🔴 LIVE";
+  position: absolute;
+  top: -8px;
+  right: 8px;
+  background: #28a745;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: bold;
+}
+
+/* Collaborative status indicator */
+.collaborative-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #e3f2fd;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.collaborative-status.connected {
+  background: #e8f5e8;
+  color: #2e7d32;
+}
+
+.collaborative-status.disconnected {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Responsive design for collaborative features */
+@media (max-width: 768px) {
+  .editor-controls {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  
+  .user-presence {
+    order: -1;
+    width: 100%;
+    justify-content: center;
+  }
+  
+  .cursor-label {
+    font-size: 8px;
+    padding: 1px 4px;
+  }
+}
+
 .collaborative-editor-header {
   display: flex;
   justify-content: space-between;
@@ -74,6 +283,12 @@ body.editor-open {
   border-bottom: 1px solid #e0e0e0;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .collaborative-editor-header h2 {

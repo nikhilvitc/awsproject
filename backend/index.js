@@ -1,9 +1,9 @@
 require('dotenv').config();
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
+const { dynamodb } = require('./config/dynamodb');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,7 +17,17 @@ const io = socketIo(server, {
       "https://awsfinalproject-frontend.onrender.com",
       "https://awsfinalproject-backend.onrender.com",
       /^https:\/\/.*\.up\.railway\.app$/, // Railway frontend domains
-      /^https:\/\/.*\.railway\.app$/ // Railway domains
+      /^https:\/\/.*\.railway\.app$/, // Railway domains
+      /^http:\/\/.*\.s3-website.*\.amazonaws\.com$/, // S3 website hosting
+      /^https:\/\/.*\.s3-website.*\.amazonaws\.com$/, // S3 website hosting HTTPS
+      /^http:\/\/.*\.s3\.amazonaws\.com$/, // S3 direct access
+      /^https:\/\/.*\.s3\.amazonaws\.com$/, // S3 direct access HTTPS
+      /^http:\/\/.*\.cloudfront\.net$/, // CloudFront HTTP
+      /^https:\/\/.*\.cloudfront\.net$/, // CloudFront HTTPS
+      /^https:\/\/.*\.amplifyapp\.com$/, // AWS Amplify
+      /^http:\/\/.*\.elasticbeanstalk\.com$/, // AWS Elastic Beanstalk HTTP
+      /^https:\/\/.*\.elasticbeanstalk\.com$/, // AWS Elastic Beanstalk HTTPS
+      /^https:\/\/.*\.amazonaws\.com$/ // AWS domains general
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
     credentials: true,
@@ -45,7 +55,18 @@ app.use(cors({
       "https://awsfinalproject-frontend.onrender.com",
       "https://awsfinalproject-backend.onrender.com",
       /^https:\/\/.*\.up\.railway\.app$/, // Railway frontend domains
-      /^https:\/\/.*\.railway\.app$/ // Railway domains
+      /^https:\/\/.*\.railway\.app$/, // Railway domains
+      /^http:\/\/.*\.s3-website.*\.amazonaws\.com$/, // S3 website hosting
+      /^https:\/\/.*\.s3-website.*\.amazonaws\.com$/, // S3 website hosting HTTPS
+      /^http:\/\/.*\.s3\.amazonaws\.com$/, // S3 direct access
+      /^https:\/\/.*\.s3\.amazonaws\.com$/, // S3 direct access HTTPS
+      /^http:\/\/.*\.cloudfront\.net$/, // CloudFront HTTP
+      /^https:\/\/.*\.cloudfront\.net$/, // CloudFront HTTPS
+      /^https:\/\/.*\.netlify\.app$/, // Netlify domains
+      /^https:\/\/.*\.vercel\.app$/, // Vercel domains
+      /^https:\/\/.*\.github\.io$/, // GitHub Pages
+      /^http:\/\/localhost:\d+$/, // Local development
+      /^https:\/\/localhost:\d+$/ // Local development HTTPS
     ];
     
     // Check if origin is allowed
@@ -81,10 +102,30 @@ app.use((req, res, next) => {
     "https://awsproject-t64b.onrender.com",
     "https://jellylemonshake-frontend.onrender.com",
     "https://awsfinalproject-frontend.onrender.com",
-    "https://awsfinalproject-backend.onrender.com"
+    "https://awsfinalproject-backend.onrender.com",
+    /^http:\/\/.*\.s3-website.*\.amazonaws\.com$/, // S3 website hosting
+    /^https:\/\/.*\.s3-website.*\.amazonaws\.com$/, // S3 website hosting HTTPS
+    /^http:\/\/.*\.s3\.amazonaws\.com$/, // S3 direct access
+    /^https:\/\/.*\.s3\.amazonaws\.com$/, // S3 direct access HTTPS
+    /^http:\/\/.*\.cloudfront\.net$/, // CloudFront HTTP
+    /^https:\/\/.*\.cloudfront\.net$/, // CloudFront HTTPS
+    /^https:\/\/.*\.amplifyapp\.com$/, // AWS Amplify
+    /^http:\/\/.*\.elasticbeanstalk\.com$/, // AWS Elastic Beanstalk HTTP
+    /^https:\/\/.*\.elasticbeanstalk\.com$/, // AWS Elastic Beanstalk HTTPS
+    /^https:\/\/.*\.amazonaws\.com$/ // AWS domains general
   ];
   
-  if (allowedOrigins.includes(origin)) {
+  // Check if origin is allowed (including regex patterns)
+  const isAllowed = allowedOrigins.some(allowedOrigin => {
+    if (typeof allowedOrigin === 'string') {
+      return allowedOrigin === origin;
+    } else if (allowedOrigin instanceof RegExp) {
+      return allowedOrigin.test(origin);
+    }
+    return false;
+  });
+  
+  if (isAllowed) {
     res.header('Access-Control-Allow-Origin', origin);
   }
   
@@ -103,30 +144,34 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// MongoDB connection
-const connectDB = async () => {
+// DynamoDB connection test
+const testDynamoDBConnection = async () => {
   try {
-    await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
-    console.log('MongoDB connected successfully');
+    await dynamodb.scan({ TableName: 'ChatRooms', Limit: 1 }).promise();
+    console.log('DynamoDB connected successfully');
   } catch (error) {
-    console.error('MongoDB connection failed:', error.message);
-    process.exit(1);
+    console.error('DynamoDB connection failed:', error.message);
+    console.log('Make sure your AWS credentials are configured and tables exist');
+    // Don't exit process, just log the error
   }
 };
 
-connectDB();
+testDynamoDBConnection();
 
 // Routes
+app.use('/api/auth', require('./routes/auth'));
 app.use('/api/rooms', require('./routes/chatrooms'));
 app.use('/api/jdoodle', require('./routes/jdoodle'));
 app.use('/api/meetings', require('./routes/meetings'));
 app.use('/api/projects', require('./routes/projects'));
 
 // Socket.IO real-time chat functionality
-const Message = require('./models/Message');
+const MessageService = require('./services/MessageService');
+const ChatRoomService = require('./services/ChatRoomService');
+
+// Create service instances
+const messageService = new MessageService();
+const chatRoomService = new ChatRoomService();
 
 // Store connected users and their rooms
 const connectedUsers = new Map();
@@ -185,25 +230,24 @@ io.on('connection', (socket) => {
       console.log('User:', user);
       console.log('Text:', text);
       
-      // Find the room by name/pin to get the MongoDB ObjectId
-      const ChatRoom = require('./models/ChatRoom');
-      const room = await ChatRoom.findOne({ name: roomId });
+      // Find the room by name/pin to get the DynamoDB roomId
+      const room = await chatRoomService.getRoomByName(roomId);
       
       if (!room) {
         console.log('Room not found, creating it...');
         // Create the room if it doesn't exist
-        const newRoom = await ChatRoom.create({
+        const newRoom = await chatRoomService.createRoom({
           name: roomId,
           createdBy: user.username || user.email || 'Anonymous',
           isPrivate: false,
           color: '#007bff',
           participants: []
         });
-        console.log('Room created:', newRoom._id);
+        console.log('Room created:', newRoom.roomId);
         
-        // Save message to database using new room's ObjectId
-        const message = await Message.create({
-          room: newRoom._id,
+        // Save message to database using new room's roomId
+        const message = await messageService.createMessage({
+          roomId: newRoom.roomId,
           user: user.username || user.email,
           text,
           code,
@@ -214,8 +258,8 @@ io.on('connection', (socket) => {
         
         // Broadcast message to all users in the room
         io.to(roomId).emit('new-message', {
-          _id: message._id,
-          room: message.room,
+          _id: message.messageId,
+          room: message.roomId,
           user: message.user,
           text: message.text,
           code: message.code,
@@ -229,9 +273,9 @@ io.on('connection', (socket) => {
         return;
       }
       
-      // Save message to database using room's ObjectId
-      const message = await Message.create({
-        room: room._id,
+      // Save message to database using room's roomId
+      const message = await messageService.createMessage({
+        roomId: room.roomId,
         user: user.username || user.email,
         text,
         code,
@@ -242,8 +286,8 @@ io.on('connection', (socket) => {
       
       // Broadcast message to all users in the room
       io.to(roomId).emit('new-message', {
-        _id: message._id,
-        room: message.room,
+        _id: message.messageId,
+        room: message.roomId,
         user: message.user,
         text: message.text,
         code: message.code,
@@ -280,6 +324,137 @@ io.on('connection', (socket) => {
       messageId,
       deletedBy
     });
+  });
+
+  // === LIVE COLLABORATIVE EDITING EVENTS ===
+  
+  // Handle file content changes for live editing
+  socket.on('file-content-change', async ({ roomId, projectId, fileId, content, userId, timestamp }) => {
+    try {
+      console.log(`File content change in room ${roomId}, project ${projectId}, file ${fileId}`);
+      
+      // Get room size to see how many users should receive this
+      const room = io.sockets.adapter.rooms.get(roomId);
+      const roomSize = room ? room.size : 0;
+      console.log(`Broadcasting to ${roomSize - 1} other users in room ${roomId}`);
+      
+      // Broadcast to all other users in the room
+      socket.to(roomId).emit('file-content-updated', {
+        projectId,
+        fileId,
+        content,
+        userId,
+        timestamp,
+        roomId
+      });
+      
+      console.log(`File content broadcasted successfully to room ${roomId}`);
+      
+      // Optionally save to database with debouncing (implement debouncing logic)
+      // For now, we'll rely on manual save or auto-save intervals
+      
+    } catch (error) {
+      console.error('Error handling file content change:', error);
+      socket.emit('error', { message: 'Failed to sync file content' });
+    }
+  });
+
+  // Handle cursor position updates
+  socket.on('cursor-position', ({ roomId, projectId, fileId, userId, position, selection }) => {
+    try {
+      console.log(`Cursor position update from ${userId} in room ${roomId}, file ${fileId}`);
+      
+      // Get room size to see how many users should receive this
+      const room = io.sockets.adapter.rooms.get(roomId);
+      const roomSize = room ? room.size : 0;
+      console.log(`Broadcasting cursor to ${roomSize - 1} other users in room ${roomId}`);
+      
+      // Broadcast cursor position to other users
+      socket.to(roomId).emit('user-cursor-updated', {
+        projectId,
+        fileId,
+        userId,
+        position,
+        selection,
+        roomId,
+        timestamp: Date.now()
+      });
+      
+      console.log(`Cursor position broadcasted successfully`);
+    } catch (error) {
+      console.error('Error handling cursor position:', error);
+    }
+  });
+
+  // Handle user selection/highlighting
+  socket.on('user-selection', ({ roomId, projectId, fileId, userId, selection, color }) => {
+    try {
+      // Broadcast selection to other users
+      socket.to(roomId).emit('user-selection-updated', {
+        projectId,
+        fileId,
+        userId,
+        selection,
+        color,
+        roomId,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      console.error('Error handling user selection:', error);
+    }
+  });
+
+  // Handle user joining a file for editing
+  socket.on('join-file-edit', ({ roomId, projectId, fileId, userId }) => {
+    try {
+      console.log(`User ${userId} joined file editing: ${fileId} in project ${projectId}`);
+      
+      // Notify other users that someone is editing this file
+      socket.to(roomId).emit('user-editing-file', {
+        projectId,
+        fileId,
+        userId,
+        roomId,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      console.error('Error handling join file edit:', error);
+    }
+  });
+
+  // Handle user leaving file editing
+  socket.on('leave-file-edit', ({ roomId, projectId, fileId, userId }) => {
+    try {
+      console.log(`User ${userId} left file editing: ${fileId} in project ${projectId}`);
+      
+      // Notify other users that someone stopped editing this file
+      socket.to(roomId).emit('user-stopped-editing-file', {
+        projectId,
+        fileId,
+        userId,
+        roomId,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      console.error('Error handling leave file edit:', error);
+    }
+  });
+
+  // Handle typing indicator for code editing
+  socket.on('code-typing', ({ roomId, projectId, fileId, userId, isTyping }) => {
+    try {
+      // Broadcast typing indicator to other users
+      socket.to(roomId).emit('user-code-typing', {
+        projectId,
+        fileId,
+        userId,
+        isTyping,
+        roomId,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      console.error('Error handling code typing:', error);
+    }
   });
 
   // Handle disconnect

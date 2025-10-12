@@ -155,6 +155,7 @@ function VideoCall({ roomId, onClose, participants = [] }) {
   const [componentError, setComponentError] = useState(null);
   const [isSettingVideoStream, setIsSettingVideoStream] = useState(false);
   const [connectionTimeout, setConnectionTimeout] = useState(null);
+  const [permissionRequested, setPermissionRequested] = useState(false);
   
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef([]);
@@ -202,6 +203,87 @@ function VideoCall({ roomId, onClose, participants = [] }) {
       setIsSettingVideoStream(false);
     }
   }, [isSettingVideoStream]);
+
+  // Manual permission request function
+  const requestPermissionsManually = async () => {
+    try {
+      setPermissionRequested(true);
+      setError('');
+      setConnectionStatus('connecting');
+      
+      console.log('Manually requesting camera and microphone permissions...');
+      
+      // Request permissions explicitly
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { 
+          width: { ideal: 640, max: 1280 },
+          height: { ideal: 480, max: 720 },
+          frameRate: { ideal: 24, max: 30 },
+          facingMode: 'user'
+        },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+      
+      localStreamRef.current = stream;
+      setLocalStream(stream);
+      
+      // Set video stream immediately
+      const setVideoStream = (retryCount = 0) => {
+        if (localVideoRef.current) {
+          setVideoStreamSafely(stream);
+          return;
+        }
+        
+        if (retryCount < 50) { // Max 5 seconds of retries
+          setTimeout(() => setVideoStream(retryCount + 1), 100);
+        } else {
+          console.error('Video element not ready after 5 seconds');
+          setError('Video element failed to initialize. Please refresh and try again.');
+          setConnectionStatus('error');
+        }
+      };
+      
+      setVideoStream();
+      setConnectionStatus('connected');
+      setupWebRTCConnections();
+      
+    } catch (err) {
+      console.error('Manual permission request failed:', err);
+      
+      let errorMessage = 'Unable to access camera/microphone. ';
+      let detailedInstructions = '';
+      
+      if (err.name === 'NotAllowedError') {
+        errorMessage += 'Permission denied. ';
+        detailedInstructions = `
+          <div style="text-align: left; margin-top: 15px;">
+            <h4>To fix this issue:</h4>
+            <ol>
+              <li>Look for the camera/microphone icon in your browser's address bar</li>
+              <li>Click on it and select "Allow" for camera and microphone</li>
+              <li>If you don't see the icon, check your browser's site settings</li>
+              <li>Refresh the page and try again</li>
+            </ol>
+            <p><strong>Browser-specific instructions:</strong></p>
+            <ul>
+              <li><strong>Chrome:</strong> Click the lock icon → Site settings → Camera/Microphone → Allow</li>
+              <li><strong>Firefox:</strong> Click the shield icon → Permissions → Camera/Microphone → Allow</li>
+              <li><strong>Safari:</strong> Safari menu → Preferences → Websites → Camera/Microphone → Allow</li>
+            </ul>
+          </div>
+        `;
+      } else {
+        errorMessage += err.message || 'Please check permissions and try again.';
+      }
+      
+      setError(errorMessage + detailedInstructions);
+      setConnectionStatus('error');
+    }
+  };
 
   useEffect(() => {
     try {
@@ -443,6 +525,35 @@ function VideoCall({ roomId, onClose, participants = [] }) {
       setConnectionStatus('connecting');
       setError(''); // Clear any previous errors
       
+      // Check if getUserMedia is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('getUserMedia is not supported in this browser. Please use a modern browser with camera/microphone support.');
+      }
+      
+      // Check if we're on HTTPS (required for getUserMedia in most browsers)
+      if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+        throw new Error('Camera and microphone access requires HTTPS. Please access the site via HTTPS.');
+      }
+
+      // Check current permission state
+      try {
+        const cameraPermission = await navigator.permissions.query({ name: 'camera' });
+        const microphonePermission = await navigator.permissions.query({ name: 'microphone' });
+        
+        console.log('Camera permission state:', cameraPermission.state);
+        console.log('Microphone permission state:', microphonePermission.state);
+        
+        if (cameraPermission.state === 'denied' || microphonePermission.state === 'denied') {
+          throw new Error('Camera and microphone permissions have been denied. Please enable them in your browser settings and refresh the page.');
+        }
+      } catch (permError) {
+        console.log('Permission query not supported or failed:', permError);
+        // Continue anyway as permission query might not be supported
+      }
+      
+      // Request permissions explicitly first
+      console.log('Requesting camera and microphone permissions...');
+      
       // Get user media with optimized settings
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { 
@@ -509,7 +620,98 @@ function VideoCall({ roomId, onClose, participants = [] }) {
       
     } catch (err) {
       console.error('Error accessing camera/microphone:', err);
-      setError('Unable to access camera/microphone. Please check permissions and try again.');
+      
+      let errorMessage = 'Unable to access camera/microphone. ';
+      let detailedInstructions = '';
+      
+      if (err.name === 'NotAllowedError') {
+        errorMessage += 'Permission denied. ';
+        detailedInstructions = `
+          <div style="text-align: left; margin-top: 15px;">
+            <h4>To fix this issue:</h4>
+            <ol>
+              <li>Look for the camera/microphone icon in your browser's address bar</li>
+              <li>Click on it and select "Allow" for camera and microphone</li>
+              <li>If you don't see the icon, check your browser's site settings</li>
+              <li>Refresh the page and try again</li>
+            </ol>
+            <p><strong>Browser-specific instructions:</strong></p>
+            <ul>
+              <li><strong>Chrome:</strong> Click the lock icon → Site settings → Camera/Microphone → Allow</li>
+              <li><strong>Firefox:</strong> Click the shield icon → Permissions → Camera/Microphone → Allow</li>
+              <li><strong>Safari:</strong> Safari menu → Preferences → Websites → Camera/Microphone → Allow</li>
+            </ul>
+          </div>
+        `;
+      } else if (err.name === 'NotFoundError') {
+        errorMessage += 'No camera or microphone found. ';
+        detailedInstructions = `
+          <div style="text-align: left; margin-top: 15px;">
+            <h4>To fix this issue:</h4>
+            <ol>
+              <li>Make sure your camera and microphone are connected</li>
+              <li>Check if other applications can access your camera/microphone</li>
+              <li>Try refreshing the page</li>
+              <li>If using external devices, ensure they're properly connected</li>
+            </ol>
+          </div>
+        `;
+      } else if (err.name === 'NotReadableError') {
+        errorMessage += 'Camera or microphone is being used by another application. ';
+        detailedInstructions = `
+          <div style="text-align: left; margin-top: 15px;">
+            <h4>To fix this issue:</h4>
+            <ol>
+              <li>Close other applications that might be using your camera/microphone</li>
+              <li>Check for video conferencing apps, streaming software, or other browsers</li>
+              <li>Restart your browser</li>
+              <li>Try refreshing the page</li>
+            </ol>
+          </div>
+        `;
+      } else if (err.name === 'OverconstrainedError') {
+        errorMessage += 'Camera settings are not supported. ';
+        detailedInstructions = `
+          <div style="text-align: left; margin-top: 15px;">
+            <h4>To fix this issue:</h4>
+            <ol>
+              <li>Try refreshing the page</li>
+              <li>Check if your camera supports the required settings</li>
+              <li>Update your camera drivers</li>
+              <li>Try using a different camera if available</li>
+            </ol>
+          </div>
+        `;
+      } else if (err.name === 'SecurityError') {
+        errorMessage += 'Security error. ';
+        detailedInstructions = `
+          <div style="text-align: left; margin-top: 15px;">
+            <h4>To fix this issue:</h4>
+            <ol>
+              <li>Make sure you're accessing the site via HTTPS (https://)</li>
+              <li>Check that your browser supports WebRTC</li>
+              <li>Try refreshing the page</li>
+              <li>If on localhost, ensure you're using http://localhost or https://localhost</li>
+            </ol>
+          </div>
+        `;
+      } else {
+        errorMessage += err.message || 'Please check permissions and try again.';
+        detailedInstructions = `
+          <div style="text-align: left; margin-top: 15px;">
+            <h4>General troubleshooting steps:</h4>
+            <ol>
+              <li>Refresh the page and try again</li>
+              <li>Check your browser's camera/microphone permissions</li>
+              <li>Ensure you're using a modern browser (Chrome, Firefox, Safari, Edge)</li>
+              <li>Try using an incognito/private window</li>
+              <li>Restart your browser</li>
+            </ol>
+          </div>
+        `;
+      }
+      
+      setError(errorMessage + detailedInstructions);
       setConnectionStatus('error');
     }
   };
@@ -1074,7 +1276,7 @@ function VideoCall({ roomId, onClose, participants = [] }) {
         {error && (
           <div className="meet-error">
             <div className="error-icon">⚠️</div>
-            <div className="error-text">{error}</div>
+            <div className="error-text" dangerouslySetInnerHTML={{ __html: error }}></div>
           </div>
         )}
 
@@ -1106,7 +1308,10 @@ function VideoCall({ roomId, onClose, participants = [] }) {
             <div className="error-icon">❌</div>
             <h3>Connection Failed</h3>
             <p>Unable to start video call. Please check your camera and microphone permissions.</p>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginTop: '20px' }}>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginTop: '20px', flexWrap: 'wrap' }}>
+              <button onClick={requestPermissionsManually} className="meet-control-btn meet-primary">
+                🎥 Request Camera Access
+              </button>
               <button onClick={initializeVideoCall} className="meet-control-btn meet-secondary">
                 🔄 Try Again
               </button>

@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const Meeting = require('../models/Meeting');
-const ChatRoom = require('../models/ChatRoom');
+const MeetingService = require('../services/MeetingService');
+const ChatRoomService = require('../services/ChatRoomService');
+
+// Create service instances
+const meetingService = new MeetingService();
+const chatRoomService = new ChatRoomService();
 
 // Create a new meeting
 router.post('/create', async (req, res) => {
@@ -30,12 +34,7 @@ router.post('/create', async (req, res) => {
       });
     }
 
-    // Generate meeting URL (in production, this would be a real meeting service URL)
-    const meetingId = new Date().getTime().toString(36) + Math.random().toString(36).substr(2);
-    const meetingUrl = `/meet/${meetingId}`;
-
     console.log('Creating meeting with data:', {
-      meetingId,
       title,
       roomId,
       organizer,
@@ -43,14 +42,13 @@ router.post('/create', async (req, res) => {
       scheduledTime: new Date(scheduledTime)
     });
 
-    const meeting = new Meeting({
-      meetingId,
+    const meetingData = {
       title,
       description,
       roomId,
       organizer,
       participants: participants || [],
-      scheduledTime: new Date(scheduledTime),
+      scheduledTime,
       duration: duration || 60,
       settings: {
         allowScreenShare: settings?.allowScreenShare !== false,
@@ -60,31 +58,29 @@ router.post('/create', async (req, res) => {
         maxParticipants: settings?.maxParticipants || 50
       },
       isRecurring: isRecurring || false,
-      recurringSettings: recurringSettings || {},
-      meetingUrl,
-      status: 'scheduled'
-    });
+      recurringSettings: recurringSettings || {}
+    };
 
-    const savedMeeting = await meeting.save();
-    console.log('Meeting saved successfully:', savedMeeting._id);
+    const meeting = await meetingService.createMeeting(meetingData);
+    console.log('Meeting created successfully:', meeting.meetingId);
 
     res.status(201).json({
       success: true,
       message: 'Meeting created successfully',
       meeting: {
-        id: savedMeeting._id,
-        meetingId: savedMeeting.meetingId,
-        title: savedMeeting.title,
-        description: savedMeeting.description,
-        roomId: savedMeeting.roomId,
-        organizer: savedMeeting.organizer,
-        participants: savedMeeting.participants,
-        scheduledTime: savedMeeting.scheduledTime,
-        duration: savedMeeting.duration,
-        meetingUrl: savedMeeting.meetingUrl,
-        settings: savedMeeting.settings,
-        status: savedMeeting.status,
-        createdAt: savedMeeting.createdAt
+        id: meeting.meetingId,
+        meetingId: meeting.meetingId,
+        title: meeting.title,
+        description: meeting.description,
+        roomId: meeting.roomId,
+        organizer: meeting.organizer,
+        participants: meeting.participants,
+        scheduledTime: meeting.scheduledTime,
+        duration: meeting.duration,
+        meetingUrl: `/meet/${meeting.meetingId}`,
+        settings: meeting.settings,
+        status: meeting.status,
+        createdAt: meeting.createdAt
       }
     });
   } catch (error) {
@@ -110,9 +106,7 @@ router.get('/room/:roomId', async (req, res) => {
       query.status = status;
     }
 
-    const meetings = await Meeting.find(query)
-      .sort({ scheduledTime: 1 })
-      .select('-__v');
+    const meetings = await meetingService.getMeetingsByRoom(roomId, status);
 
     console.log('Found meetings:', meetings.length);
 
@@ -133,7 +127,7 @@ router.get('/:meetingId', async (req, res) => {
   try {
     const { meetingId } = req.params;
 
-    const meeting = await Meeting.findOne({ meetingId: meetingId }).select('-__v');
+    const meeting = await meetingService.getMeetingById(meetingId);
 
     if (!meeting) {
       return res.status(404).json({
@@ -169,11 +163,7 @@ router.patch('/:meetingId/status', async (req, res) => {
       });
     }
 
-    const meeting = await Meeting.findOneAndUpdate(
-      { meetingId: meetingId },
-      { status, updatedAt: Date.now() },
-      { new: true }
-    ).select('-__v');
+    const meeting = await meetingService.updateMeetingStatus(meetingId, status);
 
     if (!meeting) {
       return res.status(404).json({
@@ -202,7 +192,7 @@ router.delete('/:meetingId', async (req, res) => {
   try {
     const { meetingId } = req.params;
 
-    const meeting = await Meeting.findOneAndDelete({ meetingId: meetingId });
+    const meeting = await meetingService.deleteMeeting(meetingId);
 
     if (!meeting) {
       return res.status(404).json({
@@ -230,16 +220,7 @@ router.get('/user/:organizer/upcoming', async (req, res) => {
   try {
     const { organizer } = req.params;
 
-    const meetings = await Meeting.find({
-      $or: [
-        { organizer },
-        { participants: organizer }
-      ],
-      scheduledTime: { $gte: new Date() },
-      status: 'scheduled'
-    })
-    .sort({ scheduledTime: 1 })
-    .select('-__v');
+    const meetings = await meetingService.getUpcomingMeetings(organizer);
 
     res.json({
       success: true,
@@ -259,7 +240,7 @@ router.get('/user/:organizer/upcoming', async (req, res) => {
 // Debug endpoint to list all meetings
 router.get('/debug/all', async (req, res) => {
   try {
-    const meetings = await Meeting.find({}).sort({ createdAt: -1 });
+    const meetings = await meetingService.getAllMeetings();
     console.log('All meetings in database:', meetings.length);
     res.json({
       success: true,
@@ -294,7 +275,7 @@ router.post('/:meetingId/notify', async (req, res) => {
     console.log('Meeting notification request:', { meetingId, type, organizer, message });
 
     // Find the meeting
-    const meeting = await Meeting.findOne({ meetingId });
+    const meeting = await meetingService.getMeetingById(meetingId);
     if (!meeting) {
       return res.status(404).json({ success: false, message: 'Meeting not found' });
     }

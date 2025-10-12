@@ -1,8 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const router = express.Router();
-const Project = require('../models/Project');
-const ProjectFile = require('../models/ProjectFile');
+const { dynamodb, TABLES, generateId, formatTimestamp } = require('../config/dynamodb');
 const path = require('path');
 
 // Helper function to check and add collaborator if needed
@@ -20,10 +19,21 @@ async function ensureCollaborator(project, userId) {
       username: userId,
       email: userId,
       role: 'editor',
-      joinedAt: new Date()
+      joinedAt: formatTimestamp()
     });
     
-    await project.save();
+    // Update project in DynamoDB
+    const updateParams = {
+      TableName: TABLES.PROJECTS,
+      Key: { projectId: project.projectId },
+      UpdateExpression: 'SET collaborators = :collaborators, updatedAt = :updatedAt',
+      ExpressionAttributeValues: {
+        ':collaborators': project.collaborators,
+        ':updatedAt': formatTimestamp()
+      }
+    };
+
+    await dynamodb.update(updateParams).promise();
     return true; // User was added as collaborator
   }
   
@@ -62,14 +72,16 @@ router.post('/create', async (req, res) => {
       });
     }
 
-    const projectId = `proj_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const projectId = generateId();
+    const timestamp = formatTimestamp();
 
     // Start with creator as owner
     const collaborators = [{
       userId: createdBy,
       username: createdBy,
       email: createdBy,
-      role: 'owner'
+      role: 'owner',
+      joinedAt: timestamp
     }];
 
     // Add room members as editors if provided
@@ -81,28 +93,50 @@ router.post('/create', async (req, res) => {
             username: member.username || member.email,
             email: member.email || member.username,
             role: 'editor',
-            joinedAt: new Date()
+            joinedAt: timestamp
           });
         }
       });
     }
 
-    const project = new Project({
+    const project = {
       projectId,
       name,
-      description,
+      description: description || '',
       roomId,
       createdBy,
       projectType,
-      collaborators
-    });
+      collaborators,
+      settings: {
+        allowFileUpload: true,
+        allowFileEdit: true,
+        allowCompilation: true,
+        maxFileSize: 5 * 1024 * 1024, // 5MB
+        allowedFileTypes: ['js', 'jsx', 'ts', 'tsx', 'css', 'html', 'json', 'md', 'txt']
+      },
+      compilation: {
+        status: 'idle',
+        lastCompiled: null,
+        buildOutput: null,
+        errorLog: null,
+        previewUrl: null
+      },
+      status: 'active',
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
 
-    const savedProject = await project.save();
+    const params = {
+      TableName: TABLES.PROJECTS,
+      Item: project
+    };
+
+    await dynamodb.put(params).promise();
 
     res.status(201).json({
       success: true,
       message: 'Project created successfully',
-      project: savedProject
+      project: project
     });
   } catch (error) {
     console.error('Error creating project:', error);
@@ -114,15 +148,58 @@ router.post('/create', async (req, res) => {
   }
 });
 
+// Get all projects (basic endpoint)
+router.get('/', async (req, res) => {
+  try {
+    const params = {
+      TableName: TABLES.PROJECTS,
+      FilterExpression: '#status = :status',
+      ExpressionAttributeNames: {
+        '#status': 'status'
+      },
+      ExpressionAttributeValues: {
+        ':status': 'active'
+      }
+    };
+    
+    const result = await dynamodb.scan(params).promise();
+    
+    res.json({
+      success: true,
+      projects: result.Items || []
+    });
+  } catch (error) {
+    console.error('Error fetching projects:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching projects',
+      error: error.message
+    });
+  }
+});
+
 // Get projects for a room
 router.get('/room/:roomId', async (req, res) => {
   try {
     const { roomId } = req.params;
     const { status = 'active' } = req.query;
 
-    const projects = await Project.find({ roomId, status })
-      .sort({ updatedAt: -1 })
-      .select('-__v');
+    const params = {
+      TableName: TABLES.PROJECTS,
+      IndexName: 'RoomIdIndex',
+      KeyConditionExpression: 'roomId = :roomId',
+      FilterExpression: '#status = :status',
+      ExpressionAttributeNames: {
+        '#status': 'status'
+      },
+      ExpressionAttributeValues: {
+        ':roomId': roomId,
+        ':status': status
+      }
+    };
+
+    const result = await dynamodb.query(params).promise();
+    const projects = result.Items.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 
     res.json({
       success: true,
@@ -143,22 +220,35 @@ router.get('/:projectId', async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    const project = await Project.findOne({ projectId });
-    if (!project) {
+    const projectParams = {
+      TableName: TABLES.PROJECTS,
+      Key: { projectId }
+    };
+
+    const projectResult = await dynamodb.get(projectParams).promise();
+    if (!projectResult.Item) {
       return res.status(404).json({
         success: false,
         message: 'Project not found'
       });
     }
 
-    const files = await ProjectFile.find({ projectId })
-      .sort({ fileName: 1 })
-      .select('-__v');
+    const filesParams = {
+      TableName: TABLES.PROJECT_FILES,
+      IndexName: 'ProjectIdIndex',
+      KeyConditionExpression: 'projectId = :projectId',
+      ExpressionAttributeValues: {
+        ':projectId': projectId
+      }
+    };
+
+    const filesResult = await dynamodb.query(filesParams).promise();
+    const files = filesResult.Items.sort((a, b) => a.fileName.localeCompare(b.fileName));
 
     res.json({
       success: true,
       project: {
-        ...project.toObject(),
+        ...projectResult.Item,
         files
       }
     });
@@ -186,18 +276,29 @@ router.post('/:projectId/files/paste', async (req, res) => {
     }
 
     // Check if project exists and user has permission
-    const project = await Project.findOne({ projectId });
-    if (!project) {
+    const projectParams = {
+      TableName: TABLES.PROJECTS,
+      Key: { projectId }
+    };
+
+    const projectResult = await dynamodb.get(projectParams).promise();
+    if (!projectResult.Item) {
       return res.status(404).json({
         success: false,
         message: 'Project not found'
       });
     }
 
+    const project = projectResult.Item;
+
     // Ensure user is a collaborator (add if not)
     await ensureCollaborator(project, uploadedBy);
 
-    const projectFile = new ProjectFile({
+    const fileId = generateId();
+    const timestamp = formatTimestamp();
+
+    const projectFile = {
+      fileId,
       projectId,
       fileName,
       filePath: filePath || `/${fileName}`,
@@ -209,15 +310,34 @@ router.post('/:projectId/files/paste', async (req, res) => {
         size: content.length,
         encoding: 'utf8',
         mimeType: getMimeType(fileType)
-      }
-    });
+      },
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
 
-    const savedFile = await projectFile.save();
+    const fileParams = {
+      TableName: TABLES.PROJECT_FILES,
+      Item: projectFile
+    };
+
+    await dynamodb.put(fileParams).promise();
+
+    // Update project's updatedAt timestamp
+    const updateParams = {
+      TableName: TABLES.PROJECTS,
+      Key: { projectId },
+      UpdateExpression: 'SET updatedAt = :updatedAt',
+      ExpressionAttributeValues: {
+        ':updatedAt': timestamp
+      }
+    };
+
+    await dynamodb.update(updateParams).promise();
 
     res.status(201).json({
       success: true,
       message: 'Code pasted and saved successfully',
-      file: savedFile
+      file: projectFile
     });
   } catch (error) {
     console.error('Error pasting code:', error);
@@ -352,39 +472,67 @@ router.post('/:projectId/compile', async (req, res) => {
     const { projectId } = req.params;
     const { compiledBy } = req.body;
 
-    const project = await Project.findOne({ projectId });
-    if (!project) {
+    // Get project from DynamoDB
+    const projectParams = {
+      TableName: TABLES.PROJECTS,
+      Key: { projectId }
+    };
+    const projectResult = await dynamodb.get(projectParams).promise();
+    
+    if (!projectResult.Item) {
       return res.status(404).json({
         success: false,
         message: 'Project not found'
       });
     }
 
+    const project = projectResult.Item;
+
     // Update compilation status
-    await Project.findOneAndUpdate(
-      { projectId },
-      { 
-        'compilation.status': 'compiling',
-        'compilation.lastCompiled': new Date()
+    const updateParams = {
+      TableName: TABLES.PROJECTS,
+      Key: { projectId },
+      UpdateExpression: 'SET compilation.#status = :status, compilation.lastCompiled = :timestamp',
+      ExpressionAttributeNames: {
+        '#status': 'status'
+      },
+      ExpressionAttributeValues: {
+        ':status': 'compiling',
+        ':timestamp': formatTimestamp()
       }
-    );
+    };
+    await dynamodb.update(updateParams).promise();
 
     // Get all files for compilation
-    const files = await ProjectFile.find({ projectId });
+    const filesParams = {
+      TableName: TABLES.PROJECT_FILES,
+      FilterExpression: 'projectId = :projectId',
+      ExpressionAttributeValues: {
+        ':projectId': projectId
+      }
+    };
+    const filesResult = await dynamodb.scan(filesParams).promise();
+    const files = filesResult.Items || [];
     
     // Simulate compilation process
     const compilationResult = await compileProject(project, files);
 
     // Update compilation result
-    await Project.findOneAndUpdate(
-      { projectId },
-      {
-        'compilation.status': compilationResult.success ? 'success' : 'error',
-        'compilation.buildOutput': compilationResult.output,
-        'compilation.errorLog': compilationResult.error,
-        'compilation.previewUrl': compilationResult.previewUrl
+    const finalUpdateParams = {
+      TableName: TABLES.PROJECTS,
+      Key: { projectId },
+      UpdateExpression: 'SET compilation.#status = :status, compilation.buildOutput = :output, compilation.errorLog = :error, compilation.previewUrl = :previewUrl',
+      ExpressionAttributeNames: {
+        '#status': 'status'
+      },
+      ExpressionAttributeValues: {
+        ':status': compilationResult.success ? 'success' : 'error',
+        ':output': compilationResult.output || null,
+        ':error': compilationResult.error || null,
+        ':previewUrl': compilationResult.previewUrl || null
       }
-    );
+    };
+    await dynamodb.update(finalUpdateParams).promise();
 
     res.json({
       success: true,
@@ -417,18 +565,49 @@ function getFileType(extension) {
   return typeMap[extension] || 'other';
 }
 
+// Helper function to get MIME type
+function getMimeType(fileType) {
+  const mimeMap = {
+    'javascript': 'application/javascript',
+    'jsx': 'application/javascript',
+    'typescript': 'application/typescript',
+    'tsx': 'application/typescript',
+    'css': 'text/css',
+    'html': 'text/html',
+    'json': 'application/json',
+    'other': 'text/plain'
+  };
+  return mimeMap[fileType] || 'text/plain';
+}
+
 // Preview endpoint to serve compiled HTML
 router.get('/:projectId/preview', async (req, res) => {
   try {
     const { projectId } = req.params;
     
-    // Get project and files
-    const project = await Project.findOne({ projectId });
-    if (!project) {
+    // Get project and files from DynamoDB
+    const projectParams = {
+      TableName: TABLES.PROJECTS,
+      Key: { projectId }
+    };
+    const projectResult = await dynamodb.get(projectParams).promise();
+    
+    if (!projectResult.Item) {
       return res.status(404).send('Project not found');
     }
     
-    const files = await ProjectFile.find({ projectId });
+    const project = projectResult.Item;
+    
+    const filesParams = {
+      TableName: TABLES.PROJECT_FILES,
+      FilterExpression: 'projectId = :projectId',
+      ExpressionAttributeValues: {
+        ':projectId': projectId
+      }
+    };
+    const filesResult = await dynamodb.scan(filesParams).promise();
+    const files = filesResult.Items || [];
+    
     if (files.length === 0) {
       return res.status(404).send('No files found in project');
     }

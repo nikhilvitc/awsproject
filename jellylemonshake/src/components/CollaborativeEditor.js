@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from './AuthContext';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { tomorrow } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import socketService from '../services/socketService';
 import '../styles/components/CollaborativeEditor.css';
 
 function CollaborativeEditor({ roomId, onClose, participants = [] }) {
@@ -18,26 +19,231 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
   const [previewUrl, setPreviewUrl] = useState('');
   const [showCodePaste, setShowCodePaste] = useState(false);
   const [pastedCode, setPastedCode] = useState('');
-  const [selectedLanguage, setSelectedLanguage] = useState('javascript');
+  const [selectedLanguage, setSelectedLanguage] = useState('nodejs');
   const [fileName, setFileName] = useState('');
   const [showSyntaxHighlighting, setShowSyntaxHighlighting] = useState(true);
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const [showSideScroller, setShowSideScroller] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   
+  // Live collaborative editing state
+  const [editingUsers, setEditingUsers] = useState(new Map()); // userId -> { position, selection, color, timestamp }
+  const [userCursors, setUserCursors] = useState(new Map()); // userId -> cursor info
+  const [isTyping, setIsTyping] = useState(false);
+  const [typingUsers, setTypingUsers] = useState(new Map()); // userId -> typing info
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(true);
+  const [lastSaved, setLastSaved] = useState(null);
+  const [fileVersion, setFileVersion] = useState(0);
+  const [hasConflicts, setHasConflicts] = useState(false);
+  
   const fileInputRef = useRef(null);
   const contentRef = useRef(null);
+  const textareaRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const autoSaveTimeoutRef = useRef(null);
+  const cursorUpdateTimeoutRef = useRef(null);
 
   useEffect(() => {
     if (roomId) {
       loadProjects();
+      setupCollaborativeEditing();
     }
     
-    // No body manipulation - allow natural scrolling
+    // Clean up when editor is closed
     return () => {
-      // Clean up when editor is closed
+      cleanupCollaborativeEditing();
     };
   }, [roomId]);
+
+  // Setup collaborative editing WebSocket listeners
+  const setupCollaborativeEditing = useCallback(() => {
+    console.log('Setting up collaborative editing...');
+    console.log('Socket connected:', socketService.isConnected());
+    console.log('Room ID:', roomId);
+    console.log('User:', user);
+    
+    if (!socketService.isConnected()) {
+      console.log('Connecting to socket...');
+      socketService.connect();
+    }
+
+    // Add a small delay to ensure socket is connected
+    setTimeout(() => {
+      console.log('Socket connection status after delay:', socketService.isConnected());
+    }, 1000);
+
+    // Listen for file content updates from other users
+    socketService.onFileContentUpdated((data) => {
+      console.log('📥 Received file content update:', data);
+      console.log('Current project:', selectedProject?.projectId);
+      console.log('Current file:', selectedFile?._id);
+      console.log('Current user:', user?.email || user?.username);
+      console.log('Update from user:', data.userId);
+      
+      if (data.projectId === selectedProject?.projectId && 
+          data.fileId === selectedFile?._id && 
+          data.userId !== (user?.email || user?.username)) {
+        
+        console.log('✅ Processing file content update for current file from:', data.userId);
+        
+        // Simple conflict resolution: if local version is newer, show conflict warning
+        if (data.timestamp < Date.now() - 5000) { // 5 second tolerance
+          setHasConflicts(true);
+          console.warn('Potential conflict detected with remote changes');
+        }
+        
+        setFileContent(data.content);
+        setLastSaved(new Date());
+        setFileVersion(prev => prev + 1);
+      } else {
+        console.log('❌ Ignoring file content update (not matching project/file or from self)');
+      }
+    });
+
+    // Listen for cursor position updates
+    socketService.onUserCursorUpdated((data) => {
+      console.log('🎯 Received cursor update:', data);
+      console.log('Current project:', selectedProject?.projectId);
+      console.log('Current file:', selectedFile?._id);
+      console.log('Current user:', user?.email || user?.username);
+      console.log('Cursor from user:', data.userId);
+      
+      // Accept cursor updates if:
+      // 1. Same project and file (exact match)
+      // 2. Same project but no file selected (show cursor for any file in project)
+      // 3. No project selected but received project matches available projects
+      // 4. Different user (not from self)
+      const isSameProject = data.projectId === selectedProject?.projectId;
+      const isSameFile = data.fileId === (selectedFile?._id || selectedFile?.id || selectedFile?.fileId);
+      const isDifferentUser = data.userId !== (user?.email || user?.username);
+      
+      // Check if the received project ID matches any available project
+      const hasMatchingProject = projects.some(project => project.projectId === data.projectId);
+      
+      // More permissive logic - accept cursor updates if:
+      // 1. Different user AND
+      // 2. Either same project/file OR no project selected but project exists in available projects
+      if (isDifferentUser && (
+        (isSameProject && isSameFile) || 
+        (isSameProject && !selectedFile) ||
+        (!selectedProject && hasMatchingProject) ||
+        (!selectedProject && !selectedFile) // Accept any cursor if no project/file selected
+      )) {
+        console.log('✅ Processing cursor update for current file from:', data.userId);
+        setUserCursors(prev => {
+          const newCursors = new Map(prev);
+          newCursors.set(data.userId, {
+            position: data.position,
+            selection: data.selection,
+            timestamp: data.timestamp
+          });
+          console.log('Updated cursors:', newCursors);
+          return newCursors;
+        });
+      } else {
+        console.log('❌ Ignoring cursor update:', {
+          isDifferentUser,
+          isSameProject,
+          isSameFile,
+          hasSelectedFile: !!selectedFile,
+          hasSelectedProject: !!selectedProject,
+          hasMatchingProject,
+          reason: !isDifferentUser ? 'from self' : !isSameProject && !hasMatchingProject ? 'different project' : 'different file',
+          receivedProjectId: data.projectId,
+          currentProjectId: selectedProject?.projectId,
+          availableProjects: projects.map(p => p.projectId),
+          receivedData: data
+        });
+      }
+    });
+
+    // Listen for user selection updates
+    socketService.onUserSelectionUpdated((data) => {
+      if (data.projectId === selectedProject?.projectId && 
+          data.fileId === selectedFile?._id && 
+          data.userId !== user?.email) {
+        setEditingUsers(prev => {
+          const newUsers = new Map(prev);
+          newUsers.set(data.userId, {
+            selection: data.selection,
+            color: data.color,
+            timestamp: data.timestamp
+          });
+          return newUsers;
+        });
+      }
+    });
+
+    // Listen for users editing files
+    socketService.onUserEditingFile((data) => {
+      if (data.projectId === selectedProject?.projectId && 
+          data.fileId === selectedFile?._id && 
+          data.userId !== user?.email) {
+        console.log(`User ${data.userId} is editing file ${data.fileId}`);
+      }
+    });
+
+    // Listen for users stopping file editing
+    socketService.onUserStoppedEditingFile((data) => {
+      if (data.projectId === selectedProject?.projectId && 
+          data.fileId === selectedFile?._id && 
+          data.userId !== user?.email) {
+        setUserCursors(prev => {
+          const newCursors = new Map(prev);
+          newCursors.delete(data.userId);
+          return newCursors;
+        });
+        setEditingUsers(prev => {
+          const newUsers = new Map(prev);
+          newUsers.delete(data.userId);
+          return newUsers;
+        });
+      }
+    });
+
+    // Listen for code typing indicators
+    socketService.onUserCodeTyping((data) => {
+      if (data.projectId === selectedProject?.projectId && 
+          data.fileId === selectedFile?._id && 
+          data.userId !== user?.email) {
+        setTypingUsers(prev => {
+          const newTyping = new Map(prev);
+          if (data.isTyping) {
+            newTyping.set(data.userId, {
+              timestamp: data.timestamp,
+              fileId: data.fileId
+            });
+          } else {
+            newTyping.delete(data.userId);
+          }
+          return newTyping;
+        });
+      }
+    });
+  }, [selectedProject, selectedFile, user]);
+
+  // Cleanup collaborative editing
+  const cleanupCollaborativeEditing = useCallback(() => {
+    if (selectedProject && selectedFile && user) {
+      socketService.leaveFileEdit({
+        roomId,
+        projectId: selectedProject.projectId,
+        fileId: selectedFile._id,
+        userId: user.email || user.username
+      });
+    }
+    
+    // Clear timeouts
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+    if (cursorUpdateTimeoutRef.current) {
+      clearTimeout(cursorUpdateTimeoutRef.current);
+    }
+  }, [selectedProject, selectedFile, user, roomId]);
 
   // Handle scroll events for scroll buttons
   useEffect(() => {
@@ -81,7 +287,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
 
   const loadProjects = async () => {
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       const response = await fetch(`${apiUrl}/api/projects/room/${roomId}`);
       const data = await response.json();
       
@@ -101,7 +307,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
     setError('');
 
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       const response = await fetch(`${apiUrl}/api/projects/create`, {
         method: 'POST',
         headers: {
@@ -139,7 +345,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
 
   const loadProjectFiles = async (projectId) => {
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       const response = await fetch(`${apiUrl}/api/projects/${projectId}`);
       const data = await response.json();
       
@@ -186,7 +392,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
       formData.append('uploadedBy', user?.email || user?.username);
       formData.append('lastModifiedBy', user?.email || user?.username);
 
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       const response = await fetch(`${apiUrl}/api/projects/${selectedProject.projectId}/files/upload`, {
         method: 'POST',
         body: formData
@@ -214,8 +420,57 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
   };
 
   const handleFileSelect = (file) => {
+    console.log('🔍 File selected:', file);
+    console.log('File ID:', file?._id);
+    console.log('File name:', file?.fileName);
+    console.log('File type:', file?.fileType);
+    console.log('All file properties:', Object.keys(file || {}));
+    
+    // Check if file has _id, if not, try to use id or generate one
+    let fileId = file?._id;
+    if (!fileId) {
+      fileId = file?.id || file?.fileId || `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      console.log('⚠️ File missing _id, using generated ID:', fileId);
+    }
+    
+    // Leave current file editing session if any
+    if (selectedFile && selectedProject && user) {
+      console.log('Leaving current file editing session...');
+      socketService.leaveFileEdit({
+        roomId,
+        projectId: selectedProject.projectId,
+        fileId: selectedFile._id || selectedFile.id || selectedFile.fileId,
+        userId: user.email || user.username
+      });
+    }
+
     setSelectedFile(file);
     setFileContent(file.content);
+
+    // Join new file editing session
+    if (file && selectedProject && user && socketService.isConnected()) {
+      console.log('Joining new file editing session...', {
+        roomId,
+        projectId: selectedProject.projectId,
+        fileId: fileId,
+        userId: user.email || user.username
+      });
+      
+      socketService.joinFileEdit({
+        roomId,
+        projectId: selectedProject.projectId,
+        fileId: fileId,
+        userId: user.email || user.username
+      });
+    } else {
+      console.log('Cannot join file editing session:', {
+        file: !!file,
+        selectedProject: !!selectedProject,
+        user: !!user,
+        socketConnected: socketService.isConnected(),
+        fileId: fileId
+      });
+    }
   };
 
   const handleFileDelete = async (fileId) => {
@@ -233,7 +488,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
     setSuccess('');
 
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       const response = await fetch(`${apiUrl}/api/projects/${selectedProject.projectId}/files/${fileId}`, {
         method: 'DELETE',
         headers: {
@@ -276,7 +531,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
     setSuccess('');
 
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       const response = await fetch(`${apiUrl}/api/projects/${selectedProject.projectId}/files/${selectedFile._id}`, {
         method: 'PUT',
         headers: {
@@ -307,8 +562,194 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
     }
   };
 
+  // Generate user color based on userId
+  const getUserColor = useCallback((userId) => {
+    const colors = [
+      '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+      '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'
+    ];
+    let hash = 0;
+    for (let i = 0; i < userId.length; i++) {
+      hash = userId.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return colors[Math.abs(hash) % colors.length];
+  }, []);
+
+  // Debounced function to send file content changes
+  const debouncedSendContentChange = useCallback((data) => {
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+    
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      if (data && socketService.isConnected()) {
+        console.log('Sending debounced content change:', data);
+        socketService.sendFileContentChange(data);
+      }
+    }, 300); // 300ms debounce
+  }, []);
+
+  // Debounced function to send cursor position
+  const debouncedSendCursorPosition = useCallback((position, selection) => {
+    if (cursorUpdateTimeoutRef.current) {
+      clearTimeout(cursorUpdateTimeoutRef.current);
+    }
+    
+    cursorUpdateTimeoutRef.current = setTimeout(() => {
+      if (selectedProject && selectedFile && user && socketService.isConnected()) {
+        const fileId = selectedFile._id || selectedFile.id || selectedFile.fileId;
+        if (fileId) {
+          socketService.sendCursorPosition({
+            roomId,
+            projectId: selectedProject.projectId,
+            fileId: fileId,
+            userId: user.email || user.username,
+            position,
+            selection
+          });
+        }
+      }
+    }, 100); // 100ms debounce for cursor updates
+  }, [selectedProject, selectedFile, user, roomId]);
+
+  // Handle typing indicator
+  const handleTyping = useCallback(() => {
+    if (!isTyping) {
+      setIsTyping(true);
+      if (selectedProject && selectedFile && user && socketService.isConnected()) {
+        const fileId = selectedFile._id || selectedFile.id || selectedFile.fileId;
+        if (fileId) {
+          socketService.sendCodeTyping({
+            roomId,
+            projectId: selectedProject.projectId,
+            fileId: fileId,
+            userId: user.email || user.username,
+            isTyping: true
+          });
+        }
+      }
+    }
+
+    // Clear existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    // Set new timeout to stop typing indicator
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+      if (selectedProject && selectedFile && user && socketService.isConnected()) {
+        const fileId = selectedFile._id || selectedFile.id || selectedFile.fileId;
+        if (fileId) {
+          socketService.sendCodeTyping({
+            roomId,
+            projectId: selectedProject.projectId,
+            fileId: fileId,
+            userId: user.email || user.username,
+            isTyping: false
+          });
+        }
+      }
+    }, 1000);
+  }, [isTyping, selectedProject, selectedFile, user, roomId]);
+
   const handleFileContentChange = (content) => {
+    console.log('📝 File content changed:', content.length, 'characters');
+    console.log('📁 Selected file:', selectedFile);
+    console.log('📁 Selected file ID:', selectedFile?._id);
+    console.log('📁 Selected project:', selectedProject);
+    console.log('👤 User:', user);
     setFileContent(content);
+    
+    // Get file ID with fallback
+    const fileId = selectedFile?._id || selectedFile?.id || selectedFile?.fileId;
+    console.log('📁 Using file ID:', fileId);
+    
+    // Send live update to other users
+    if (selectedProject && selectedFile && user && socketService.isConnected() && fileId) {
+      console.log('📤 Sending content change to other users...', {
+        roomId,
+        projectId: selectedProject.projectId,
+        fileId: fileId,
+        userId: user.email || user.username
+      });
+      
+      debouncedSendContentChange({
+        roomId,
+        projectId: selectedProject.projectId,
+        fileId: fileId,
+        content: content,
+        userId: user.email || user.username,
+        timestamp: Date.now()
+      });
+    } else {
+      console.log('❌ Cannot send content change:', {
+        selectedProject: !!selectedProject,
+        selectedFile: !!selectedFile,
+        user: !!user,
+        socketConnected: socketService.isConnected(),
+        fileId: fileId
+      });
+    }
+    
+    // Handle typing indicator
+    handleTyping();
+    
+    // Auto-save if enabled
+    if (autoSaveEnabled) {
+      // Auto-save will be handled by the debounced function above
+    }
+  };
+
+  // Handle cursor position changes
+  const handleCursorChange = (event) => {
+    const textarea = event.target;
+    const position = textarea.selectionStart;
+    const selection = {
+      start: textarea.selectionStart,
+      end: textarea.selectionEnd
+    };
+    
+    console.log('🎯 Cursor position changed:', position, selection);
+    console.log('📁 Selected file ID:', selectedFile?._id);
+    console.log('📁 Selected project ID:', selectedProject?.projectId);
+    console.log('👤 User:', user?.email || user?.username);
+    
+    // Get file ID with fallback
+    const fileId = selectedFile?._id || selectedFile?.id || selectedFile?.fileId;
+    console.log('📁 Using file ID:', fileId);
+    
+    if (selectedProject && selectedFile && user && fileId) {
+      console.log('📤 Sending cursor position...');
+      debouncedSendCursorPosition(position, selection);
+    } else {
+      console.log('❌ Cannot send cursor position:', {
+        selectedProject: !!selectedProject,
+        selectedFile: !!selectedFile,
+        user: !!user,
+        fileId: fileId
+      });
+    }
+  };
+
+  // Handle selection changes
+  const handleSelectionChange = (event) => {
+    const textarea = event.target;
+    const selection = {
+      start: textarea.selectionStart,
+      end: textarea.selectionEnd
+    };
+    
+    if (selectedProject && selectedFile && user && socketService.isConnected()) {
+      socketService.sendUserSelection({
+        roomId,
+        projectId: selectedProject.projectId,
+        fileId: selectedFile._id,
+        userId: user.email || user.username,
+        selection,
+        color: getUserColor(user.email || user.username)
+      });
+    }
   };
 
   const saveFileContent = async () => {
@@ -318,7 +759,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
     setError('');
 
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       const response = await fetch(`${apiUrl}/api/projects/${selectedProject.projectId}/files/${selectedFile._id}`, {
         method: 'PUT',
         headers: {
@@ -361,7 +802,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
     setSuccess('');
 
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       const response = await fetch(`${apiUrl}/api/projects/${selectedProject.projectId}/compile`, {
         method: 'POST',
         headers: {
@@ -459,7 +900,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
     setError('');
 
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:5000';
       
       // Create a file object for the pasted code
       const fileData = {
@@ -505,7 +946,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
 
   const getMimeType = (language) => {
     const mimeTypes = {
-      'javascript': 'text/javascript',
+      'nodejs': 'text/javascript',
       'css': 'text/css',
       'html': 'text/html',
       'json': 'application/json'
@@ -515,7 +956,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
 
   const getFileExtension = (language) => {
     const extensions = {
-      'javascript': '.js',
+      'nodejs': '.js',
       'css': '.css',
       'html': '.html',
       'json': '.json'
@@ -549,7 +990,18 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
       <div className="collaborative-editor-container" onClick={e => e.stopPropagation()}>
         <div className="collaborative-editor-header">
           <h2>🚀 Collaborative Code Editor</h2>
-          <button className="close-btn" onClick={onClose}>×</button>
+          <div className="header-controls">
+            <div className={`collaborative-status ${socketService.isConnected() ? 'connected' : 'disconnected'}`}>
+              <div className="status-indicator"></div>
+              <span>{socketService.isConnected() ? 'Live Collaboration Active' : 'Disconnected'}</span>
+              <span style={{ fontSize: '10px', marginLeft: '10px' }}>
+                Socket: {socketService.isConnected() ? '✅' : '❌'} | 
+                Room: {roomId ? '✅' : '❌'} | 
+                User: {user ? '✅' : '❌'}
+              </span>
+            </div>
+            <button className="close-btn" onClick={onClose}>×</button>
+          </div>
         </div>
         
         <div className="collaborative-editor-content" ref={contentRef}>
@@ -661,21 +1113,196 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
                   <div className="file-editor">
                     <div className="editor-header">
                       <span className="file-name">{selectedFile.fileName}</span>
-                      <button 
-                        onClick={handleFileSave}
-                        className="btn-save"
-                        disabled={loading}
-                      >
-                        💾 Save
-                      </button>
+                      <div className="editor-controls">
+                        {/* User presence indicators */}
+                        <div className="user-presence">
+                          {Array.from(editingUsers.keys()).map(userId => (
+                            <div 
+                              key={userId} 
+                              className="user-indicator"
+                              style={{ backgroundColor: getUserColor(userId) }}
+                              title={`${userId} is editing`}
+                            >
+                              {userId.charAt(0).toUpperCase()}
+                            </div>
+                          ))}
+                          {Array.from(typingUsers.keys()).map(userId => (
+                            <div 
+                              key={`typing-${userId}`} 
+                              className="typing-indicator"
+                              title={`${userId} is typing...`}
+                            >
+                              ✏️
+                            </div>
+                          ))}
+                        </div>
+                        <label className="checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={autoSaveEnabled}
+                            onChange={(e) => setAutoSaveEnabled(e.target.checked)}
+                          />
+                          Auto-save
+                        </label>
+                        {lastSaved && (
+                          <span className="last-saved">
+                            Last saved: {lastSaved.toLocaleTimeString()}
+                          </span>
+                        )}
+                        {hasConflicts && (
+                          <span className="conflict-warning" title="Potential conflicts detected">
+                            ⚠️ Conflicts
+                          </span>
+                        )}
+                        <span className="debug-info" style={{ fontSize: '10px', color: '#666' }}>
+                          Cursors: {userCursors.size} | Users: {editingUsers.size}
+                        </span>
+                        <button 
+                          onClick={handleFileSave}
+                          className="btn-save"
+                          disabled={loading}
+                        >
+                          💾 Save
+                        </button>
+                        <button 
+                          onClick={() => {
+                            console.log('Testing collaborative features...');
+                            console.log('Socket connected:', socketService.isConnected());
+                            console.log('Selected project:', selectedProject?.projectId);
+                            console.log('Selected file:', selectedFile?._id);
+                            console.log('User:', user?.email);
+                            console.log('Room ID:', roomId);
+                            
+                            // Force reconnect if not connected
+                            if (!socketService.isConnected()) {
+                              console.log('Forcing socket reconnection...');
+                              socketService.connect();
+                            }
+                            
+                            // Test sending a cursor position
+                            if (selectedProject && selectedFile && user) {
+                              socketService.sendCursorPosition({
+                                roomId,
+                                projectId: selectedProject.projectId,
+                                fileId: selectedFile._id,
+                                userId: user.email || user.username,
+                                position: 10,
+                                selection: { start: 10, end: 10 }
+                              });
+                              console.log('Test cursor position sent');
+                              
+                              // Also simulate receiving a cursor from another user
+                              setTimeout(() => {
+                                console.log('Simulating cursor from another user...');
+                                setUserCursors(prev => {
+                                  const newCursors = new Map(prev);
+                                  newCursors.set('test-user', {
+                                    position: 25,
+                                    selection: { start: 25, end: 25 },
+                                    timestamp: Date.now()
+                                  });
+                                  console.log('Added test cursor:', newCursors);
+                                  return newCursors;
+                                });
+                                
+                                // Also simulate editing users
+                                setEditingUsers(prev => {
+                                  const newUsers = new Map(prev);
+                                  newUsers.set('test-user', {
+                                    selection: { start: 25, end: 30 },
+                                    color: '#FF6B6B',
+                                    timestamp: Date.now()
+                                  });
+                                  console.log('Added test editing user:', newUsers);
+                                  return newUsers;
+                                });
+                                
+                                // Simulate typing
+                                setTypingUsers(prev => {
+                                  const newTyping = new Map(prev);
+                                  newTyping.set('test-user', {
+                                    timestamp: Date.now(),
+                                    fileId: selectedFile._id
+                                  });
+                                  console.log('Added test typing user:', newTyping);
+                                  return newTyping;
+                                });
+                              }, 1000);
+                            }
+                          }}
+                          className="btn-secondary"
+                          style={{ fontSize: '12px', padding: '4px 8px' }}
+                        >
+                          🧪 Test
+                        </button>
+                        <button 
+                          onClick={() => {
+                            console.log('Force reconnecting socket...');
+                            socketService.disconnect();
+                            setTimeout(() => {
+                              socketService.connect();
+                              console.log('Socket reconnected');
+                            }, 1000);
+                          }}
+                          className="btn-secondary"
+                          style={{ fontSize: '12px', padding: '4px 8px' }}
+                        >
+                          🔄 Reconnect
+                        </button>
+                      </div>
                     </div>
-                    <textarea
-                      value={fileContent}
-                      onChange={(e) => handleFileContentChange(e.target.value)}
-                      className="code-editor"
-                      placeholder="Start coding..."
-                      spellCheck={false}
-                    />
+                    <div className="editor-container">
+                      <textarea
+                        ref={textareaRef}
+                        value={fileContent}
+                        onChange={(e) => handleFileContentChange(e.target.value)}
+                        onSelect={handleSelectionChange}
+                        onKeyUp={handleCursorChange}
+                        onMouseUp={handleCursorChange}
+                        className="code-editor"
+                        placeholder="Start coding..."
+                        spellCheck={false}
+                      />
+                      {/* User cursors overlay */}
+                      <div className="cursors-overlay">
+                        {console.log('Rendering cursors:', Array.from(userCursors.entries()))}
+                        {Array.from(userCursors.entries()).map(([userId, cursorInfo]) => {
+                          // Calculate approximate cursor position
+                          const lines = fileContent.split('\n');
+                          let currentPos = 0;
+                          let lineIndex = 0;
+                          let charIndex = 0;
+                          
+                          for (let i = 0; i < lines.length; i++) {
+                            if (currentPos + lines[i].length >= cursorInfo.position) {
+                              lineIndex = i;
+                              charIndex = cursorInfo.position - currentPos;
+                              break;
+                            }
+                            currentPos += lines[i].length + 1; // +1 for newline
+                          }
+                          
+                          const top = lineIndex * 21; // Approximate line height
+                          const left = charIndex * 8.4; // Approximate character width
+                          
+                          return (
+                            <div
+                              key={userId}
+                              className="user-cursor"
+                              style={{
+                                top: `${top}px`,
+                                left: `${left}px`,
+                                backgroundColor: getUserColor(userId)
+                              }}
+                              title={`${userId}'s cursor`}
+                            >
+                              <div className="cursor-line"></div>
+                              <div className="cursor-label">{userId}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -801,7 +1428,7 @@ function CollaborativeEditor({ roomId, onClose, participants = [] }) {
                       onChange={(e) => handleLanguageChange(e.target.value)}
                       className="form-select"
                     >
-                      <option value="javascript">JavaScript</option>
+                      <option value="nodejs">JavaScript</option>
                       <option value="css">CSS</option>
                       <option value="html">HTML</option>
                       <option value="json">JSON</option>

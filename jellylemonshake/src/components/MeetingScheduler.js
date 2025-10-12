@@ -134,7 +134,7 @@ function MeetingScheduler({ roomId, participants, onClose, onMeetingCreated }) {
         } : null
       };
 
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
       
       // Test API connection first
       const statusResponse = await fetch(`${apiUrl}/api/meetings/debug/status`);

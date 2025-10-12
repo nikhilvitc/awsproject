@@ -129,7 +129,7 @@ function MessageItem({
       console.log(`🚀 Executing ${message.language} code:`, codeToExecute);
 
       // Call the backend API for code execution
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
       const response = await fetch(`${apiUrl}/api/jdoodle/execute`, {
         method: 'POST',
         headers: {
@@ -209,7 +209,7 @@ function MessageItem({
   const handleDeleteMessage = async () => {
     if (window.confirm('Are you sure you want to delete this message? This action cannot be undone.')) {
       try {
-        const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+        const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
         const response = await fetch(`${apiUrl}/api/rooms/${roomId}/messages/${message._id}`, {
           method: 'DELETE',
           headers: {
@@ -431,7 +431,7 @@ function MessageItem({
             {/* Show either code or interactive output based on toggle state */}
             {!showOutput ? (
               <SyntaxHighlighter
-                language={message.language || "javascript"}
+                language={message.language === "nodejs" ? "javascript" : (message.language || "javascript")}
                 style={dracula}
                 customStyle={{
                   margin: 0,

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '../supabaseClient';
+import { api } from './api';
 
 const AuthContext = createContext();
 
@@ -10,42 +10,46 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     // Get initial session
     const getInitialSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        setUser(session.user);
-      } else {
-        // Guest mode: generate random guest user
-        const guest = localStorage.getItem('guestUser');
-        if (guest) {
-          setUser(JSON.parse(guest));
+      try {
+        // Check if user is logged in
+        const token = localStorage.getItem('authToken');
+        if (token) {
+          const response = await api.getCurrentUser();
+          if (response.success) {
+            setUser(response.user);
+          } else {
+            localStorage.removeItem('authToken');
+          }
         } else {
-          const guestUser = {
-            id: 'guest-' + Math.random().toString(36).substring(2, 10),
-            username: 'Guest' + Math.floor(Math.random() * 10000),
-            isGuest: true,
-          };
-          localStorage.setItem('guestUser', JSON.stringify(guestUser));
-          setUser(guestUser);
+          // Guest mode: generate random guest user
+          const guest = localStorage.getItem('guestUser');
+          if (guest) {
+            setUser(JSON.parse(guest));
+          } else {
+            const guestUser = {
+              id: 'guest-' + Math.random().toString(36).substring(2, 10),
+              username: 'Guest' + Math.floor(Math.random() * 10000),
+              isGuest: true,
+            };
+            localStorage.setItem('guestUser', JSON.stringify(guestUser));
+            setUser(guestUser);
+          }
         }
+      } catch (error) {
+        console.error('Error getting initial session:', error);
+        // Fallback to guest mode
+        const guestUser = {
+          id: 'guest-' + Math.random().toString(36).substring(2, 10),
+          username: 'Guest' + Math.floor(Math.random() * 10000),
+          isGuest: true,
+        };
+        localStorage.setItem('guestUser', JSON.stringify(guestUser));
+        setUser(guestUser);
       }
       setLoading(false);
     };
 
     getInitialSession();
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session && session.user) {
-        setUser(session.user);
-        localStorage.removeItem('guestUser');
-      } else {
-        setUser(null);
-      }
-    });
-
-    return () => {
-      subscription?.unsubscribe();
-    };
   }, []);
 
   const login = async (email, password) => {
@@ -61,19 +65,19 @@ export function AuthProvider({ children }) {
         throw new Error('Please enter a valid email address');
       }
 
-      const { data, error } = await supabase.auth.signInWithPassword({ 
+      const response = await api.login({ 
         email: email.trim(), 
         password: password.trim() 
       });
       
-      if (error) {
-        console.error('Supabase login error:', error);
-        throw new Error(error.message || 'Login failed');
+      if (response.success) {
+        setUser(response.user);
+        localStorage.setItem('authToken', response.token);
+        localStorage.removeItem('guestUser');
+        return response.user;
+      } else {
+        throw new Error(response.message || 'Login failed');
       }
-      
-      setUser(data.user);
-      localStorage.removeItem('guestUser');
-      return data.user;
     } catch (err) {
       console.error('Login error:', err);
       throw err;
@@ -99,31 +103,20 @@ export function AuthProvider({ children }) {
         throw new Error('Please enter a valid email address');
       }
 
-      const { data, error } = await supabase.auth.signUp({ 
+      const response = await api.register({ 
         email: email.trim(), 
         password: password.trim(),
-        options: {
-          data: {
-            display_name: name?.trim() || email.trim().split('@')[0]
-          },
-          emailRedirectTo: `${window.location.origin}/`
-        }
+        username: name?.trim() || email.trim().split('@')[0]
       });
       
-      if (error) {
-        console.error('Supabase signup error:', error);
-        throw new Error(error.message || 'Signup failed');
+      if (response.success) {
+        setUser(response.user);
+        localStorage.setItem('authToken', response.token);
+        localStorage.removeItem('guestUser');
+        return { user: response.user, needsEmailConfirmation: false };
+      } else {
+        throw new Error(response.message || 'Signup failed');
       }
-      
-      // Don't automatically set user if email confirmation is required
-      if (data.user && !data.user.email_confirmed_at) {
-        // User needs to confirm email
-        return { user: data.user, needsEmailConfirmation: true };
-      }
-      
-      setUser(data.user);
-      localStorage.removeItem('guestUser');
-      return { user: data.user, needsEmailConfirmation: false };
     } catch (err) {
       console.error('Signup error:', err);
       throw err;
@@ -131,7 +124,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
+    localStorage.removeItem('authToken');
     setUser(null);
     // Optionally, re-enable guest mode
     const guestUser = {

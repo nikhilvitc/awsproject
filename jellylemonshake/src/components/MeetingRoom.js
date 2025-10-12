@@ -21,7 +21,7 @@ function MeetingRoom() {
 
   const loadMeeting = async () => {
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
       console.log('Loading meeting with ID:', meetingId);
       console.log('API URL:', apiUrl);
       
@@ -75,7 +75,7 @@ function MeetingRoom() {
 
   const sendMeetingNotification = async () => {
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
       
       // Send notification to room participants
       await fetch(`${apiUrl}/api/meetings/${meetingId}/notify`, {

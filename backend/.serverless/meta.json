@@ -1,0 +1,120 @@
+{
+  "/Users/nikhilkumar/aws project 1/awsproject/backend/serverless.yml": {
+    "versionFramework": "4.21.0",
+    "servicePath": "/Users/nikhilkumar/aws project 1/awsproject/backend/serverless.yml",
+    "serviceConfigFileName": "serverless.yml",
+    "service": {
+      "service": "awsproject-backend",
+      "provider": {
+        "name": "aws",
+        "runtime": "nodejs18.x",
+        "region": "us-east-1",
+        "environment": {
+          "NODE_ENV": "production",
+          "AWS_REGION": "${opt:region, 'us-east-1'}"
+        },
+        "iamRoleStatements": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "dynamodb:Query",
+              "dynamodb:Scan",
+              "dynamodb:GetItem",
+              "dynamodb:PutItem",
+              "dynamodb:UpdateItem",
+              "dynamodb:DeleteItem",
+              "dynamodb:BatchGetItem",
+              "dynamodb:BatchWriteItem"
+            ],
+            "Resource": [
+              "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ChatRooms",
+              "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Messages",
+              "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Meetings",
+              "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Projects",
+              "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ProjectFiles",
+              "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ChatRooms/index/*",
+              "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Messages/index/*",
+              "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Meetings/index/*",
+              "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Projects/index/*",
+              "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ProjectFiles/index/*"
+            ]
+          }
+        ]
+      },
+      "functions": {
+        "api": {
+          "handler": "serverless-backend.handler",
+          "events": [
+            {
+              "http": {
+                "path": "/{proxy+}",
+                "method": "ANY",
+                "cors": true
+              }
+            },
+            {
+              "http": {
+                "path": "/",
+                "method": "ANY",
+                "cors": true
+              }
+            }
+          ]
+        }
+      },
+      "plugins": [
+        "serverless-offline"
+      ]
+    },
+    "provider": {
+      "name": "aws",
+      "runtime": "nodejs18.x",
+      "region": "us-east-1",
+      "environment": {
+        "NODE_ENV": "production",
+        "AWS_REGION": "${opt:region, 'us-east-1'}"
+      },
+      "iamRoleStatements": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "dynamodb:Query",
+            "dynamodb:Scan",
+            "dynamodb:GetItem",
+            "dynamodb:PutItem",
+            "dynamodb:UpdateItem",
+            "dynamodb:DeleteItem",
+            "dynamodb:BatchGetItem",
+            "dynamodb:BatchWriteItem"
+          ],
+          "Resource": [
+            "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ChatRooms",
+            "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Messages",
+            "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Meetings",
+            "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Projects",
+            "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ProjectFiles",
+            "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ChatRooms/index/*",
+            "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Messages/index/*",
+            "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Meetings/index/*",
+            "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Projects/index/*",
+            "arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ProjectFiles/index/*"
+          ]
+        }
+      ]
+    },
+    "error": {
+      "message": "You must sign in or use a license key with Serverless Framework V.4 and later versions. Please use \"serverless login\".",
+      "stack": "Error: You must sign in or use a license key with Serverless Framework V.4 and later versions. Please use \"serverless login\".\n    at Authentication.getAuthenticatedData (file:///Users/nikhilkumar/.serverless/releases/4.21.0/package/dist/sf-core.js:708:10911)\n    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n    at async Authentication.authenticate (file:///Users/nikhilkumar/.serverless/releases/4.21.0/package/dist/sf-core.js:710:22530)\n    at async TraditionalRunner.resolveVariablesAndAuthenticate (file:///Users/nikhilkumar/.serverless/releases/4.21.0/package/dist/sf-core.js:715:1458)\n    at async TraditionalRunner.run (file:///Users/nikhilkumar/.serverless/releases/4.21.0/package/dist/sf-core.js:1334:27914)\n    at async route (file:///Users/nikhilkumar/.serverless/releases/4.21.0/package/dist/sf-core.js:1509:2878)\n    at async Object.run (file:///Users/nikhilkumar/.serverless/releases/4.21.0/package/dist/sf-core.js:1510:3755)\n    at async run2 (file:///Users/nikhilkumar/.serverless/releases/4.21.0/package/dist/sf-core.js:1510:4909)"
+    },
+    "serviceRawFile": "service: awsproject-backend\n\nprovider:\n  name: aws\n  runtime: nodejs18.x\n  region: us-east-1\n  environment:\n    NODE_ENV: production\n    AWS_REGION: ${opt:region, 'us-east-1'}\n  iamRoleStatements:\n    - Effect: Allow\n      Action:\n        - dynamodb:Query\n        - dynamodb:Scan\n        - dynamodb:GetItem\n        - dynamodb:PutItem\n        - dynamodb:UpdateItem\n        - dynamodb:DeleteItem\n        - dynamodb:BatchGetItem\n        - dynamodb:BatchWriteItem\n      Resource: \n        - \"arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ChatRooms\"\n        - \"arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Messages\"\n        - \"arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Meetings\"\n        - \"arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Projects\"\n        - \"arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ProjectFiles\"\n        - \"arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ChatRooms/index/*\"\n        - \"arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Messages/index/*\"\n        - \"arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Meetings/index/*\"\n        - \"arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/Projects/index/*\"\n        - \"arn:aws:dynamodb:${opt:region, 'us-east-1'}:*:table/ProjectFiles/index/*\"\n\nfunctions:\n  api:\n    handler: serverless-backend.handler\n    events:\n      - http:\n          path: /{proxy+}\n          method: ANY\n          cors: true\n      - http:\n          path: /\n          method: ANY\n          cors: true\n\nplugins:\n  - serverless-offline\n",
+    "command": [
+      "deploy"
+    ],
+    "options": {},
+    "serviceProviderAwsCfStackId": null,
+    "serviceProviderAwsCfStackCreated": null,
+    "serviceProviderAwsCfStackUpdated": null,
+    "serviceProviderAwsCfStackStatus": null,
+    "serviceProviderAwsCfStackOutputs": null
+  }
+}

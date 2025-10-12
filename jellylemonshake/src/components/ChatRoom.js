@@ -94,7 +94,7 @@ function ChatRoom() {
   const [dragDirection, setDragDirection] = useState(null);
   // Code language states
   const [showLanguageSelector, setShowLanguageSelector] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState("javascript");
+  const [selectedLanguage, setSelectedLanguage] = useState("nodejs");
   // Mention feature states
   const [showMentionList, setShowMentionList] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
@@ -122,7 +122,7 @@ function ChatRoom() {
   // Add at the top with other useState imports
   const [executionMode, setExecutionMode] = useState(false);
   const [codeToRun, setCodeToRun] = useState("");
-  const [runLanguage, setRunLanguage] = useState("javascript");
+  const [runLanguage, setRunLanguage] = useState("nodejs");
   const [runOutput, setRunOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [showCollaborativeEditor, setShowCollaborativeEditor] = useState(false);
@@ -168,7 +168,7 @@ function ChatRoom() {
 
   // Supported coding languages
   const codeLanguages = [
-    { id: "javascript", name: "JavaScript" },
+    { id: "nodejs", name: "JavaScript" },
     { id: "python", name: "Python" },
     { id: "java", name: "Java" },
     { id: "cpp", name: "C++" },
@@ -344,10 +344,10 @@ function ChatRoom() {
       }, 10000); // 10 second timeout
       
       try {
-        const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+        const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
         console.log('Loading messages for room:', roomId);
         
-        const response = await fetch(`${apiUrl}/api/rooms/${roomId}/messages?username=${authUser?.username || authUser?.email}`, {
+        const response = await fetch(`${apiUrl}/api/rooms/${roomId}/messages?username=${authUser?.email || authUser?.username}`, {
           method: 'GET',
           headers: {
             'Accept': 'application/json',
@@ -396,7 +396,7 @@ function ChatRoom() {
           return;
         }
         
-        const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+        const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
         const userIdentifier = getUserIdentifier();
         console.log('Creating room:', roomId, 'for user:', userIdentifier);
         
@@ -1064,8 +1064,8 @@ function ChatRoom() {
       if (!room) {
         console.log('Room not found in localStorage, checking backend...');
         try {
-          const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
-          const response = await fetch(`${apiUrl}/api/rooms/${roomId}?username=${authUser?.username || authUser?.email}`);
+          const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
+          const response = await fetch(`${apiUrl}/api/rooms/${roomId}?username=${authUser?.email || authUser?.username}`);
           
           if (response.ok) {
             const roomData = await response.json();
@@ -1147,8 +1147,8 @@ function ChatRoom() {
       if (localMessages.length === 0) {
         console.log('No local messages found, fetching from backend...');
         try {
-          const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
-          const messagesResponse = await fetch(`${apiUrl}/api/rooms/${roomId}/messages?username=${authUser?.username || authUser?.email}`);
+          const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
+          const messagesResponse = await fetch(`${apiUrl}/api/rooms/${roomId}/messages?username=${authUser?.email || authUser?.username}`);
           
           if (messagesResponse.ok) {
             const backendMessages = await messagesResponse.json();
@@ -1524,7 +1524,7 @@ function ChatRoom() {
     if (!messageSent) {
       console.log('Socket.IO not available, using REST API fallback');
       try {
-        const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+        const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
         const response = await fetch(`${apiUrl}/api/rooms/${roomId}/messages`, {
           method: 'POST',
           headers: {
@@ -1629,7 +1629,7 @@ function ChatRoom() {
   // Load admin permissions for the current user
   const loadAdminPermissions = async () => {
     try {
-      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+      const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
       const username = getUserIdentifier();
       
       const response = await fetch(`${apiUrl}/api/rooms/${roomId}/permissions/${username}`);
@@ -2503,7 +2503,7 @@ function ChatRoom() {
                     setIsRunning(true);
                     setRunOutput("");
                     try {
-                      const apiUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+                      const apiUrl = process.env.REACT_APP_API_URL || 'http://awsproject-backend-prod.eba-fphuu5yq.us-east-1.elasticbeanstalk.com';
                       const res = await fetch(`${apiUrl}/api/jdoodle/execute`, {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },

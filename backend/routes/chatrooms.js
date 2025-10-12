@@ -1,19 +1,25 @@
 const express = require('express');
 const router = express.Router();
+const ChatRoomService = require('../services/ChatRoomService');
+const MessageService = require('../services/MessageService');
 const ChatRoom = require('../models/ChatRoom');
 const Message = require('../models/Message');
+
+// Create service instances
+const chatRoomService = new ChatRoomService();
+const messageService = new MessageService();
 
 // Debug endpoint to list all rooms
 router.get('/debug/all', async (req, res) => {
   try {
-    const rooms = await ChatRoom.find({}, 'name createdBy participants createdAt').sort({ createdAt: -1 });
+    const rooms = await chatRoomService.getAllRooms();
     res.json({
       success: true,
       count: rooms.length,
       rooms: rooms.map(room => ({
         name: room.name,
         createdBy: room.createdBy,
-        participantCount: room.participants.length,
+        participantCount: room.participants ? room.participants.length : 0,
         createdAt: room.createdAt
       }))
     });
@@ -26,11 +32,11 @@ router.get('/debug/all', async (req, res) => {
 // Debug endpoint to test database connection
 router.get('/debug/test', async (req, res) => {
   try {
-    const count = await ChatRoom.countDocuments();
+    const rooms = await chatRoomService.getAllRooms();
     res.json({
       success: true,
       message: 'Database connection working',
-      totalRooms: count,
+      totalRooms: rooms.length,
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -68,8 +74,21 @@ router.post('/', async (req, res) => {
     console.log('Sanitized created by:', sanitizedCreatedBy);
     console.log('Participants:', participants);
     
-    let room = await ChatRoom.findOne({ name: sanitizedName });
-    console.log('Existing room found:', room ? 'YES' : 'NO');
+    let room;
+    try {
+      room = await chatRoomService.getRoomByName(sanitizedName);
+      console.log('Existing room found:', room ? 'YES' : 'NO');
+    } catch (error) {
+      // If index is not ready, try to get all rooms and filter
+      if (error.message && error.message.includes('backfilling')) {
+        console.log('Index not ready, trying alternative method');
+        const allRooms = await chatRoomService.getAllRooms();
+        room = allRooms.find(r => r.name === sanitizedName);
+        console.log('Existing room found (via scan):', room ? 'YES' : 'NO');
+      } else {
+        throw error;
+      }
+    }
     
     if (!room) {
       // Create new room
@@ -77,7 +96,7 @@ router.post('/', async (req, res) => {
       // Ensure creator is added as both admin and participant
       const creatorParticipant = {
         username: sanitizedCreatedBy,
-        joinedAt: new Date(),
+        joinedAt: new Date().toISOString(),
         isAdmin: true,
         permissions: {
           canSendMessages: true,
@@ -94,7 +113,7 @@ router.post('/', async (req, res) => {
         allParticipants.push(creatorParticipant);
       }
       
-      room = await ChatRoom.create({ 
+      room = await chatRoomService.createRoom({ 
         name: sanitizedName,
         createdBy: sanitizedCreatedBy,
         isPrivate: isPrivate || false,
@@ -104,24 +123,19 @@ router.post('/', async (req, res) => {
         participants: allParticipants
       });
       
-      // Ensure the room is properly saved and indexed
-      await room.save();
-      console.log('Room created successfully:', room._id);
+      console.log('Room created successfully:', room.roomId);
       console.log('Room name in DB:', room.name);
-      
-      // Verify the room can be found immediately after creation
-      const verifyRoom = await ChatRoom.findOne({ name: sanitizedName });
-      console.log('Room verification after creation:', verifyRoom ? 'SUCCESS' : 'FAILED');
     } else {
       // Room exists, add participant if provided
       console.log('Room exists, adding participant if needed:', name);
       if (participants && participants.length > 0) {
         const newParticipant = participants[0];
-        const existingParticipant = room.participants.find(p => p.username === newParticipant.username);
+        const existingParticipant = room.participants && room.participants.find(p => p.username === newParticipant.username);
         
         if (!existingParticipant) {
-          room.participants.push(newParticipant);
-          await room.save();
+          await chatRoomService.addParticipant(room.roomId, newParticipant);
+          // Refresh room data
+          room = await chatRoomService.getRoomById(room.roomId);
           console.log('Participant added to existing room:', newParticipant.username);
         } else {
           console.log('Participant already exists in room:', newParticipant.username);
@@ -130,16 +144,20 @@ router.post('/', async (req, res) => {
     }
     
     // Get unique participants for response
-    const uniqueParticipants = room.getAllUniqueParticipants();
+    const uniqueParticipants = room.participants || [];
+    const uniqueParticipantCount = uniqueParticipants.length;
     
     res.json({
-      ...room.toObject(),
-      uniqueParticipants,
-      uniqueParticipantCount: room.getUniqueParticipantCount()
+      success: true,
+      room: {
+        ...room,
+        uniqueParticipants,
+        uniqueParticipantCount
+      }
     });
   } catch (err) {
     console.error('Error creating/joining room:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ success: false, error: err.message, message: err.message });
   }
 });
 
@@ -167,25 +185,27 @@ router.post('/:roomId/join', async (req, res) => {
     console.log('Sanitized Room ID:', sanitizedRoomId);
     console.log('Username:', username);
     console.log('Sanitized Username:', sanitizedUsername);
+    console.log('Request body:', req.body);
+    console.log('Request params:', req.params);
     
-    // First, let's see what rooms exist in the database
-    const allRooms = await ChatRoom.find({}, 'name createdBy').limit(10);
-    console.log('All rooms in database:', allRooms.map(r => ({ name: r.name, createdBy: r.createdBy })));
-    
-    // Try to find room with multiple search strategies
-    let room = await ChatRoom.findOne({ name: sanitizedRoomId });
-    console.log('Exact match search result:', room ? 'FOUND' : 'NOT FOUND');
-    
-    // If not found, try case-insensitive search
-    if (!room) {
-      room = await ChatRoom.findOne({ name: { $regex: new RegExp(`^${sanitizedRoomId}$`, 'i') } });
-      console.log('Case-insensitive search result:', room ? 'FOUND' : 'NOT FOUND');
-    }
-    
-    // If still not found, try with trimmed search
-    if (!room) {
-      room = await ChatRoom.findOne({ name: sanitizedRoomId.trim() });
-      console.log('Trimmed search result:', room ? 'FOUND' : 'NOT FOUND');
+    // Get all rooms to debug
+    const allRooms = await chatRoomService.getAllRooms();
+    console.log('All available rooms:', allRooms.map(r => r.name));
+    console.log('Looking for room with name:', sanitizedRoomId);
+
+    // Get room using DynamoDB service
+    let room;
+    try {
+      room = await chatRoomService.getRoomByName(sanitizedRoomId);
+    } catch (error) {
+      // If index is not ready, try to get all rooms and filter
+      if (error.message && error.message.includes('backfilling')) {
+        console.log('Index not ready, trying alternative method');
+        const allRooms = await chatRoomService.getAllRooms();
+        room = allRooms.find(r => r.name === sanitizedRoomId);
+      } else {
+        throw error;
+      }
     }
     
     console.log('Room found:', room ? 'YES' : 'NO');
@@ -193,39 +213,24 @@ router.post('/:roomId/join', async (req, res) => {
       console.log('Room details:', {
         name: room.name,
         createdBy: room.createdBy,
-        participants: room.participants.length,
-        admins: room.admins.length
+        participants: room.participants ? room.participants.length : 0,
+        admins: room.admins ? room.admins.length : 0
       });
     }
     
     if (!room) {
-      // Try one more time with a small delay to handle potential timing issues
-      console.log('Room not found on first attempt, retrying...');
-      await new Promise(resolve => setTimeout(resolve, 100)); // 100ms delay
-      
-      room = await ChatRoom.findOne({ name: sanitizedRoomId });
-      if (!room) {
-        room = await ChatRoom.findOne({ name: { $regex: new RegExp(`^${sanitizedRoomId}$`, 'i') } });
-      }
-      
-      if (!room) {
-        console.log('Room still not found after retry');
-        return res.status(404).json({ 
-          error: 'Room not found. The room may have been deleted or the PIN is incorrect.',
-          debug: {
-            searchedRoomId: sanitizedRoomId,
-            totalRoomsInDB: allRooms.length,
-            availableRooms: allRooms.map(r => r.name)
-          }
-        });
-      }
-      console.log('Room found on retry!');
+      console.log('Room not found');
+      return res.status(404).json({ 
+        success: false,
+        error: 'Room not found. The room may have been deleted or the PIN is incorrect.',
+        message: 'Room not found'
+      });
     }
     
     // Check if user is already a member (check all possible ways)
-    const isAlreadyMember = room.participants.some(p => p.username === sanitizedUsername) || 
+    const isAlreadyMember = (room.participants && room.participants.some(p => p.username === sanitizedUsername)) || 
                            room.createdBy === sanitizedUsername || 
-                           room.admins.includes(sanitizedUsername);
+                           (room.admins && room.admins.includes(sanitizedUsername));
     
     if (isAlreadyMember) {
       return res.json({ 
@@ -237,15 +242,15 @@ router.post('/:roomId/join', async (req, res) => {
     
     // Check if room is private and requires password
     if (room.isPrivate && room.password && room.password !== password) {
-      return res.status(403).json({ error: 'Invalid password for private room' });
+      return res.status(403).json({ success: false, error: 'Invalid password for private room', message: 'Invalid password' });
     }
     
-    // Add user to room
+    // Add user to room using the service
     const newParticipant = {
       username: sanitizedUsername,
       isCreator: false,
       isAdmin: false,
-      joinedAt: new Date(),
+      joinedAt: new Date().toISOString(),
       color: '#007bff',
       permissions: {
         canDeleteMessages: false,
@@ -255,19 +260,21 @@ router.post('/:roomId/join', async (req, res) => {
       }
     };
     
-    room.participants.push(newParticipant);
-    await room.save();
+    await chatRoomService.addParticipant(room.roomId, newParticipant);
+    
+    // Refresh room data
+    room = await chatRoomService.getRoomById(room.roomId);
     
     // Get unique participants for response
-    const uniqueParticipants = room.getAllUniqueParticipants();
+    const uniqueParticipants = room.participants || [];
     
     res.json({ 
       success: true, 
       message: 'Successfully joined room',
       room: {
-        ...room.toObject(),
+        ...room,
         uniqueParticipants,
-        uniqueParticipantCount: room.getUniqueParticipantCount()
+        uniqueParticipantCount: uniqueParticipants.length
       }
     });
   } catch (err) {
@@ -286,7 +293,7 @@ router.get('/:roomName', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
     
-    const room = await ChatRoom.findOne({ name: roomName });
+    const room = await chatRoomService.getRoomByName(roomName);
     
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
@@ -315,12 +322,25 @@ router.get('/:roomName', async (req, res) => {
     }
     
     // Get unique participants for response
-    const uniqueParticipants = room.getAllUniqueParticipants();
+    const uniqueParticipants = room.participants;
     
     res.json({
-      ...room.toObject(),
-      uniqueParticipants,
-      uniqueParticipantCount: room.getUniqueParticipantCount()
+      success: true,
+      room: {
+        name: room.name,
+        createdBy: room.createdBy,
+        isPrivate: room.isPrivate,
+        password: room.password,
+        participants: room.participants,
+        admins: room.admins,
+        color: room.color,
+        createdAt: room.createdAt,
+        lastActivity: room.lastActivity,
+        settings: room.settings,
+        uniqueParticipants: uniqueParticipants,
+        uniqueParticipantCount: uniqueParticipants.length,
+        roomId: room.roomId
+      }
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -336,14 +356,8 @@ router.get('/', async (req, res) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
     
-    // Find rooms where user is a member, creator, or admin
-    const rooms = await ChatRoom.find({
-      $or: [
-        { 'participants.username': username },
-        { createdBy: username },
-        { admins: username }
-      ]
-    }).select('-__v');
+    // Find rooms where user is a member, creator, or admin using DynamoDB service
+    const rooms = await chatRoomService.getRoomsForUser(username);
     
     res.json(rooms);
   } catch (err) {
@@ -363,9 +377,19 @@ router.get('/:roomId/messages', async (req, res) => {
     
     console.log('=== GETTING MESSAGES FOR ROOM:', roomId, '===');
     
-    // First find the room by name/pin to get the MongoDB ObjectId
+    // Find the room by name using DynamoDB service
     console.log('Step 1: Looking for room with name:', roomId);
-    const room = await ChatRoom.findOne({ name: roomId });
+    let room;
+    try {
+      room = await chatRoomService.getRoomByName(roomId);
+    } catch (error) {
+      if (error.message && error.message.includes('backfilling')) {
+        const allRooms = await chatRoomService.getAllRooms();
+        room = allRooms.find(r => r.name === roomId);
+      } else {
+        throw error;
+      }
+    }
     
     if (!room) {
       console.log('Step 2: Room not found, returning empty array');
@@ -373,9 +397,9 @@ router.get('/:roomId/messages', async (req, res) => {
     }
     
     // Check if user is a member of the room
-    const isParticipant = room.participants.some(p => p.username === username);
+    const isParticipant = room.participants && room.participants.some(p => p.username === username);
     const isCreator = room.createdBy === username;
-    const isAdmin = room.admins.includes(username);
+    const isAdmin = room.admins && room.admins.includes(username);
     const isMember = isParticipant || isCreator || isAdmin;
     
     console.log('Messages access check:', {
@@ -385,20 +409,20 @@ router.get('/:roomId/messages', async (req, res) => {
       isCreator,
       isAdmin,
       isMember,
-      participants: room.participants.map(p => p.username),
+      participants: room.participants ? room.participants.map(p => p.username) : [],
       createdBy: room.createdBy,
-      admins: room.admins
+      admins: room.admins || []
     });
     
     if (!isMember) {
       return res.status(403).json({ error: 'Access denied. You must be a member of this room.' });
     }
     
-    console.log('Step 2: Found room with ObjectId:', room._id);
+    console.log('Step 2: Found room with roomId:', room.roomId);
     
-    // Then find messages using the room's ObjectId
-    console.log('Step 3: Searching for messages with room._id:', room._id);
-    const messages = await Message.find({ room: room._id }).sort({ createdAt: 1 });
+    // Get messages using DynamoDB service
+    console.log('Step 3: Searching for messages with roomId:', room.roomId);
+    const messages = await messageService.getMessagesByRoom(room.roomId);
     console.log('Step 4: Found', messages.length, 'messages');
     
     res.status(200).json(messages);
@@ -441,7 +465,7 @@ router.post('/:roomId/messages', async (req, res) => {
     
     // First find the room by name/pin to get the MongoDB ObjectId
     console.log('Step 1: Looking for room with name:', sanitizedRoomId);
-    const room = await ChatRoom.findOne({ name: sanitizedRoomId });
+    const room = await chatRoomService.getRoomByName(sanitizedRoomId);
     
     if (!room) {
       console.log('Step 2: Room not found, returning 404');
@@ -462,11 +486,9 @@ router.post('/:roomId/messages', async (req, res) => {
     };
     console.log('Message data for creation:', messageData);
     
-    const message = await Message.create(messageData);
-    console.log('Step 4: Created message with ID:', message._id);
+    const message = await messageService.createMessage(messageData);
+    console.log('Step 4: Created message with ID:', message.messageId);
     
-    // Populate the room field in the response
-    await message.populate('room');
     console.log('Step 5: Message created successfully');
     res.status(201).json(message);
   } catch (err) {
@@ -485,7 +507,7 @@ router.get('/:roomId/members', async (req, res) => {
     const { roomId } = req.params;
     const { username } = req.query; // Current user
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -513,7 +535,7 @@ router.delete('/:roomId/messages/:messageId', async (req, res) => {
     const { roomId, messageId } = req.params;
     const { username } = req.body; // Current user
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -523,7 +545,7 @@ router.delete('/:roomId/messages/:messageId', async (req, res) => {
       return res.status(403).json({ error: 'Admin privileges required' });
     }
     
-    const message = await Message.findByIdAndDelete(messageId);
+    const message = await messageService.deleteMessage(messageId);
     if (!message) {
       return res.status(404).json({ error: 'Message not found' });
     }
@@ -541,7 +563,7 @@ router.delete('/:roomId/members/:username', async (req, res) => {
     const { roomId, username: targetUsername } = req.params;
     const { username: adminUsername } = req.body; // Admin performing the action
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -577,7 +599,7 @@ router.post('/:roomId/admins', async (req, res) => {
     const { roomId } = req.params;
     const { username: targetUsername, adminUsername } = req.body;
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -619,7 +641,7 @@ router.delete('/:roomId/admins/:username', async (req, res) => {
     const { roomId, username: targetUsername } = req.params;
     const { username: adminUsername } = req.body;
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -664,7 +686,7 @@ router.patch('/:roomId/settings', async (req, res) => {
     const { roomId } = req.params;
     const { username, settings } = req.body;
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -691,7 +713,7 @@ router.delete('/:roomId/messages/:messageId', async (req, res) => {
     const { roomId, messageId } = req.params;
     const { username } = req.body;
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -702,10 +724,7 @@ router.delete('/:roomId/messages/:messageId', async (req, res) => {
     }
     
     // Find and delete the message
-    const message = await Message.findOneAndDelete({ 
-      _id: messageId, 
-      roomId: roomId 
-    });
+    const message = await messageService.deleteMessage(messageId);
     
     if (!message) {
       return res.status(404).json({ error: 'Message not found' });
@@ -728,7 +747,7 @@ router.patch('/:roomId/name', async (req, res) => {
       return res.status(400).json({ error: 'Room name cannot be empty' });
     }
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -739,8 +758,8 @@ router.patch('/:roomId/name', async (req, res) => {
     }
     
     // Check if new name already exists
-    const existingRoom = await ChatRoom.findOne({ name: newName.trim() });
-    if (existingRoom && existingRoom._id.toString() !== room._id.toString()) {
+    const existingRoom = await chatRoomService.getRoomByName(newName.trim());
+    if (existingRoom && existingRoom.roomId !== room.roomId) {
       return res.status(400).json({ error: 'Room name already exists' });
     }
     
@@ -771,7 +790,7 @@ router.patch('/:roomId/color', async (req, res) => {
       return res.status(400).json({ error: 'Invalid color format' });
     }
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -801,21 +820,23 @@ router.get('/:roomId/permissions/:username', async (req, res) => {
   try {
     const { roomId, username } = req.params;
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
     
-    const isAdmin = room.isUserAdmin(username);
+    // Check if user is admin
+    const isAdmin = room.admins && room.admins.includes(username);
     const isCreator = room.createdBy === username;
     
+    // Default permissions for admins/creators
     const permissions = {
       isAdmin,
       isCreator,
-      canDeleteMessages: room.hasPermission(username, 'canDeleteMessages'),
-      canRemoveMembers: room.hasPermission(username, 'canRemoveMembers'),
-      canManageAdmins: room.hasPermission(username, 'canManageAdmins'),
-      canEditRoomSettings: room.hasPermission(username, 'canEditRoomSettings')
+      canDeleteMessages: isAdmin || isCreator,
+      canRemoveMembers: isAdmin || isCreator,
+      canManageAdmins: isAdmin || isCreator,
+      canEditRoomSettings: isAdmin || isCreator
     };
     
     res.json({ success: true, permissions });
@@ -831,7 +852,7 @@ router.delete('/:roomId/members/:username', async (req, res) => {
     const { roomId, username: targetUsername } = req.params;
     const { username: adminUsername } = req.body;
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }
@@ -879,7 +900,7 @@ router.post('/:roomId/invite-admin', async (req, res) => {
       return res.status(400).json({ error: 'Username, email, and invitedBy are required' });
     }
     
-    const room = await ChatRoom.findOne({ name: roomId });
+    const room = await chatRoomService.getRoomByName(roomId);
     if (!room) {
       return res.status(404).json({ error: 'Room not found' });
     }

@@ -1,0 +1,41 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:BatchGetItem",
+        "dynamodb:BatchWriteItem"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:*:table/Users",
+        "arn:aws:dynamodb:us-east-1:*:table/ChatRooms",
+        "arn:aws:dynamodb:us-east-1:*:table/Messages",
+        "arn:aws:dynamodb:us-east-1:*:table/Meetings",
+        "arn:aws:dynamodb:us-east-1:*:table/Projects",
+        "arn:aws:dynamodb:us-east-1:*:table/ProjectFiles",
+        "arn:aws:dynamodb:us-east-1:*:table/Users/index/*",
+        "arn:aws:dynamodb:us-east-1:*:table/ChatRooms/index/*",
+        "arn:aws:dynamodb:us-east-1:*:table/Messages/index/*",
+        "arn:aws:dynamodb:us-east-1:*:table/Meetings/index/*",
+        "arn:aws:dynamodb:us-east-1:*:table/Projects/index/*",
+        "arn:aws:dynamodb:us-east-1:*:table/ProjectFiles/index/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    }
+  ]
+}

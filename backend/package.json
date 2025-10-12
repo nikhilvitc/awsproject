@@ -5,19 +5,23 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test-dynamodb.js",
+    "create-tables": "node scripts/createTables.js",
+    "check-setup": "node check-setup.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "aws-sdk": "^2.1692.0",
     "axios": "^1.12.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^4.18.2",
-    "mongoose": "^8.16.5",
     "multer": "^1.4.5-lts.1",
-    "socket.io": "^4.8.1"
+    "serverless-http": "^4.0.0",
+    "socket.io": "^4.8.1",
+    "uuid": "^13.0.0"
   }
 }

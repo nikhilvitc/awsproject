@@ -1,14 +1,8 @@
-const mongoose = require('mongoose');
+// DynamoDB Message model - no longer using mongoose
+// This file is kept for compatibility but the actual DynamoDB operations
+// are handled by the MessageService
 
-const messageSchema = new mongoose.Schema({
-  room: { type: mongoose.Schema.Types.ObjectId, ref: 'ChatRoom', required: true },
-  user: { type: String, required: true },
-  text: { type: String },
-  code: { type: String },
-  language: { type: String },
-  output: { type: String },
-  isCode: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now },
-});
-
-module.exports = mongoose.model('Message', messageSchema); 
+module.exports = {
+  // Placeholder for compatibility
+  // Actual operations are in services/MessageService.js
+};

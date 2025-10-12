@@ -41,7 +41,7 @@ export const Login = () => {
   return (
     <div className="auth-container">
       <div className="auth-card">
-        <h2>Log In</h2>
+        <h2 className="auth-title">Log In</h2>
         <p className="auth-subtitle">
           Welcome back! Please log in to access your account.
         </p>
@@ -50,10 +50,11 @@ export const Login = () => {
 
         <form onSubmit={handleSubmit} className="auth-form">
           <div className="form-group">
-            <label htmlFor="email">Email</label>
+            <label htmlFor="email" className="form-label">Email</label>
             <input
               type="email"
               id="email"
+              className="form-input"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Enter your email"
@@ -62,10 +63,11 @@ export const Login = () => {
           </div>
 
           <div className="form-group">
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password" className="form-label">Password</label>
             <input
               type="password"
               id="password"
+              className="form-input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter your password"
@@ -73,19 +75,17 @@ export const Login = () => {
             />
           </div>
 
-          <button type="submit" className="auth-button" disabled={isLoading}>
+          <button type="submit" className="auth-submit" disabled={isLoading}>
             {isLoading ? "Logging in..." : "Log In"}
           </button>
         </form>
 
-        <div className="auth-links">
-          <Link to="/forgot-password" className="auth-link">
-            Forgot Password?
-          </Link>
-          <span className="auth-divider">•</span>
-          <Link to="/register" className="auth-link">
-            Create Account
-          </Link>
+        <div className="auth-link">
+          <span className="auth-link-text">
+            <Link to="/forgot-password">Forgot Password?</Link>
+            {' • '}
+            <Link to="/register">Create Account</Link>
+          </span>
         </div>
 
         <div className="auth-guest">
@@ -177,7 +177,7 @@ export const Register = () => {
   return (
     <div className="auth-container">
       <div className="auth-card">
-        <h2>Create Account</h2>
+        <h2 className="auth-title">Create Account</h2>
         <p className="auth-subtitle">
           Sign up to save your chats and access them from any device.
         </p>
@@ -192,10 +192,11 @@ export const Register = () => {
 
         <form onSubmit={handleSubmit} className="auth-form">
           <div className="form-group">
-            <label htmlFor="name">Name</label>
+            <label htmlFor="name" className="form-label">Name</label>
             <input
               type="text"
               id="name"
+              className="form-input"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Enter your name"
@@ -204,10 +205,11 @@ export const Register = () => {
           </div>
 
           <div className="form-group">
-            <label htmlFor="email">Email</label>
+            <label htmlFor="email" className="form-label">Email</label>
             <input
               type="email"
               id="email"
+              className="form-input"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Enter your email"
@@ -216,10 +218,11 @@ export const Register = () => {
           </div>
 
           <div className="form-group">
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password" className="form-label">Password</label>
             <input
               type="password"
               id="password"
+              className="form-input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Create a password"
@@ -227,26 +230,26 @@ export const Register = () => {
             />
           </div>
           <div className="form-group">
-            <label htmlFor="confirm-password">Confirm Password</label>
+            <label htmlFor="confirm-password" className="form-label">Confirm Password</label>
             <input
               type="password"
               id="confirm-password"
+              className="form-input"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="Confirm your password"
               required
             />
           </div>
-          <button type="submit" className="auth-button" disabled={isLoading}>
+          <button type="submit" className="auth-submit" disabled={isLoading}>
             {isLoading ? "Creating Account..." : "Create Account"}
           </button>
         </form>
 
-        <div className="auth-links">
-          <span className="auth-info-text">Already have an account?</span>
-          <Link to="/login" className="auth-link">
-            Log In
-          </Link>
+        <div className="auth-link">
+          <span className="auth-link-text">
+            Already have an account? <Link to="/login">Log In</Link>
+          </span>
         </div>
 
         <div className="auth-guest">

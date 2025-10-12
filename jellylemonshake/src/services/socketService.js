@@ -1,4 +1,5 @@
 import { io } from 'socket.io-client';
+import { getSocketUrl, config } from '../config';
 
 class SocketService {
   constructor() {
@@ -16,7 +17,7 @@ class SocketService {
       this.socket.disconnect();
     }
 
-    const serverUrl = process.env.REACT_APP_API_URL || 'https://awsproject-backend.onrender.com';
+    const serverUrl = getSocketUrl();
     console.log('Connecting to Socket.IO server:', serverUrl);
     
     // Add error handling for connection failures
@@ -29,12 +30,12 @@ class SocketService {
       transports: ['polling', 'websocket'], // Try polling first, then websocket
       upgrade: true,
       rememberUpgrade: false,
-      timeout: 20000,
+      timeout: config.socketTimeout || 20000,
       reconnection: true,
-      reconnectionDelay: 1000,
+      reconnectionDelay: config.socketReconnectionDelay || 1000,
       reconnectionDelayMax: 5000,
-      reconnectionAttempts: 5,
-      maxReconnectionAttempts: 5,
+      reconnectionAttempts: config.socketReconnectionAttempts || 5,
+      maxReconnectionAttempts: config.socketReconnectionAttempts || 5,
       forceNew: true,
       autoConnect: true,
       secure: serverUrl.startsWith('https'), // Use secure connection only for HTTPS
@@ -222,6 +223,148 @@ class SocketService {
   off(event, callback) {
     if (this.socket) {
       this.socket.off(event, callback);
+    }
+  }
+
+  // === LIVE COLLABORATIVE EDITING METHODS ===
+
+  // Send file content changes for live editing
+  sendFileContentChange(data) {
+    if (this.socket && this.socket.connected) {
+      try {
+        this.socket.emit('file-content-change', data);
+        return true;
+      } catch (error) {
+        console.error('Failed to send file content change:', error);
+        return false;
+      }
+    } else {
+      console.warn('Socket not connected, cannot send file content change');
+      return false;
+    }
+  }
+
+  // Send cursor position updates
+  sendCursorPosition(data) {
+    if (this.socket && this.socket.connected) {
+      try {
+        this.socket.emit('cursor-position', data);
+        return true;
+      } catch (error) {
+        console.error('Failed to send cursor position:', error);
+        return false;
+      }
+    } else {
+      console.warn('Socket not connected, cannot send cursor position');
+      return false;
+    }
+  }
+
+  // Send user selection/highlighting
+  sendUserSelection(data) {
+    if (this.socket && this.socket.connected) {
+      try {
+        this.socket.emit('user-selection', data);
+        return true;
+      } catch (error) {
+        console.error('Failed to send user selection:', error);
+        return false;
+      }
+    } else {
+      console.warn('Socket not connected, cannot send user selection');
+      return false;
+    }
+  }
+
+  // Join file editing session
+  joinFileEdit(data) {
+    if (this.socket && this.socket.connected) {
+      try {
+        this.socket.emit('join-file-edit', data);
+        return true;
+      } catch (error) {
+        console.error('Failed to join file edit:', error);
+        return false;
+      }
+    } else {
+      console.warn('Socket not connected, cannot join file edit');
+      return false;
+    }
+  }
+
+  // Leave file editing session
+  leaveFileEdit(data) {
+    if (this.socket && this.socket.connected) {
+      try {
+        this.socket.emit('leave-file-edit', data);
+        return true;
+      } catch (error) {
+        console.error('Failed to leave file edit:', error);
+        return false;
+      }
+    } else {
+      console.warn('Socket not connected, cannot leave file edit');
+      return false;
+    }
+  }
+
+  // Send code typing indicator
+  sendCodeTyping(data) {
+    if (this.socket && this.socket.connected) {
+      try {
+        this.socket.emit('code-typing', data);
+        return true;
+      } catch (error) {
+        console.error('Failed to send code typing:', error);
+        return false;
+      }
+    } else {
+      console.warn('Socket not connected, cannot send code typing');
+      return false;
+    }
+  }
+
+  // === EVENT LISTENERS FOR COLLABORATIVE EDITING ===
+
+  // Listen for file content updates
+  onFileContentUpdated(callback) {
+    if (this.socket) {
+      this.socket.on('file-content-updated', callback);
+    }
+  }
+
+  // Listen for cursor position updates
+  onUserCursorUpdated(callback) {
+    if (this.socket) {
+      this.socket.on('user-cursor-updated', callback);
+    }
+  }
+
+  // Listen for user selection updates
+  onUserSelectionUpdated(callback) {
+    if (this.socket) {
+      this.socket.on('user-selection-updated', callback);
+    }
+  }
+
+  // Listen for user editing file
+  onUserEditingFile(callback) {
+    if (this.socket) {
+      this.socket.on('user-editing-file', callback);
+    }
+  }
+
+  // Listen for user stopped editing file
+  onUserStoppedEditingFile(callback) {
+    if (this.socket) {
+      this.socket.on('user-stopped-editing-file', callback);
+    }
+  }
+
+  // Listen for code typing indicator
+  onUserCodeTyping(callback) {
+    if (this.socket) {
+      this.socket.on('user-code-typing', callback);
     }
   }
 }
